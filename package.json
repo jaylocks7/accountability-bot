@@ -1,0 +1,30 @@
+{
+  "name": "task-bot",
+  "version": "1.0.0",
+  "description": "Idea: -I have to do lists I make for myself every night for the next day. They sit as a text to myself in the Signal App on my phone. When the next day arrives, I go to the text in my phone and delete any tasks I accomplish as I complete them. However the text can easily get buried under other notes I make throughout the day, and if I have any leftover tasks at the day's end I have to add them (if I remember) to the next list.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jaylocks7/accountability-bot.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/jaylocks7/accountability-bot/issues"
+  },
+  "homepage": "https://github.com/jaylocks7/accountability-bot#readme",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.71.2",
+    "@aws-sdk/client-dynamodb": "^3.956.0",
+    "@aws-sdk/lib-dynamodb": "^3.956.0",
+    "twilio": "^5.11.1"
+  },
+  "devDependencies": {
+    "dotenv": "^17.2.3"
+  }
+}
