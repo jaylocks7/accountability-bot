@@ -1,6 +1,6 @@
 // Comprehensive test script for DynamoDB functions
 import assert from 'assert';
-import { saveCheckIn, getRecordsForDate, getTasksForDate, batchUpdateTasks, deleteRecordsForDate } from '../src/services/dynamodb.js';
+import { saveCheckIn, getRecordsForDate, getTasksForDate, batchUpdateTasks, deleteRecordsForDate, resetRateLimit } from '../src/services/dynamodb.js';
 
 // Use a date from the distant past to avoid conflicts with real data
 const TEST_DATE = "2000-01-01";
@@ -141,6 +141,9 @@ async function testInputValidation() {
 async function testSanitization() {
   console.log("\n🧹 Testing Input Sanitization...\n");
 
+  // Clear any existing test data
+  await deleteRecordsForDate(TEST_DATE);
+
   const testTimestamp = Date.now();
 
   // Test character sanitization
@@ -156,13 +159,14 @@ async function testSanitization() {
   assert.strictEqual(taskRecord.tasks[2].text, "groceries  laundry", "Ampersands should be removed");
   console.log("✅ Malicious characters sanitized");
 
-  // Test allowed characters (overwrite existing task list)
+  // Test allowed characters (clear previous test data first)
+  await deleteRecordsForDate(TEST_DATE);
   await saveCheckIn(TEST_DATE, testTimestamp + 1, "task_list", [
     { text: "it's mom's birthday! @gym +workout $100", completed: false, priority: true }
   ]);
 
   const allowedCharsRecord = await getTasksForDate(TEST_DATE);
-  assert.strictEqual(allowedCharsRecord.tasks[0].text, "its moms birthday! @gym +workout $100", "Allowed special chars should remain");
+  assert.strictEqual(allowedCharsRecord.tasks[0].text, "it's mom's birthday! @gym +workout $100", "Allowed special chars should remain");
   console.log("✅ Allowed characters preserved");
 }
 
@@ -170,9 +174,12 @@ async function testSanitization() {
 async function testLengthLimits() {
   console.log("\n📏 Testing Length Limits...\n");
 
+  // Clear any existing test data
+  await deleteRecordsForDate(TEST_DATE);
+
   const testTimestamp = Date.now();
 
-  // Test max tasks (30) - overwrite existing task list
+  // Test max tasks (30)
   const maxTasks = Array.from({ length: 30 }, (_, i) => ({
     text: `task${i}`,
     completed: false,
@@ -196,6 +203,7 @@ async function testLengthLimits() {
   console.log("✅ Too many tasks (31) rejected");
 
   // Test task text length (500 chars max)
+  await deleteRecordsForDate(TEST_DATE);
   const longText = "a".repeat(500);
   await saveCheckIn(TEST_DATE, testTimestamp + 4, "task_list", [
     { text: longText, completed: false, priority: false }
@@ -239,9 +247,9 @@ async function testRateLimiting() {
   const baseTimestamp = Date.now();
 
   // Execute 100 operations (should succeed)
-  // Note: We've already used some operations in previous tests, so adjust accordingly
-  // Clear the date first to get accurate count
+  // Clear the date and reset rate limit to get accurate count
   await deleteRecordsForDate(TEST_DATE);
+  resetRateLimit(TEST_DATE);
 
   for (let i = 0; i < 100; i++) {
     await saveCheckIn(TEST_DATE, baseTimestamp + i, "user_input", [], `message ${i}`);
@@ -262,6 +270,7 @@ async function testSaveCheckIn() {
 
   // Clear from rate limit test
   await deleteRecordsForDate(TEST_DATE);
+  resetRateLimit(TEST_DATE);
 
   const baseTimestamp = Date.now();
 

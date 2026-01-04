@@ -34,6 +34,15 @@ function checkRateLimit(date) {
   limitData.count++;
 }
 
+// Helper function to reset rate limit (for testing purposes)
+function resetRateLimit(date) {
+  if (date) {
+    rateLimitMap.delete(date);
+  } else {
+    rateLimitMap.clear();
+  }
+}
+
 //WRITE
 //Case 1 -- end of day check in to get task list for next day
 //Case 2 -- save a user msg to agent (ie i finished laundry!)
@@ -387,5 +396,5 @@ async function deleteRecordsForDate(date) {
 }
 
 // Export functions
-export { saveCheckIn, getRecordsForDate, getTasksForDate, batchUpdateTasks, deleteRecordsForDate };
+export { saveCheckIn, getRecordsForDate, getTasksForDate, batchUpdateTasks, deleteRecordsForDate, resetRateLimit };
 
