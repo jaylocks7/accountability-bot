@@ -22,7 +22,7 @@
     "@anthropic-ai/sdk": "^0.71.2",
     "@aws-sdk/client-dynamodb": "^3.956.0",
     "@aws-sdk/lib-dynamodb": "^3.956.0",
-    "twilio": "^5.11.1"
+    "axios": "^1.13.2"
   },
   "devDependencies": {
     "dotenv": "^17.2.3"
