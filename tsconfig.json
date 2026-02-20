@@ -1,0 +1,50 @@
+{
+  "compilerOptions": {
+    /* Language and Environment */
+    "target": "ES2022",                          // Node.js 20.x supports ES2022
+    "lib": ["ES2022"],                           // Standard library features
+
+    /* Modules */
+    "module": "ES2022",                          // Use ES modules (matches your package.json "type": "module")
+    "moduleResolution": "node",                  // Node.js module resolution
+    "resolveJsonModule": true,                   // Allow importing .json files
+
+    /* Emit */
+    "outDir": "./dist",                          // Compiled output directory
+    "rootDir": "./src",                          // Source files directory
+    "sourceMap": true,                           // Generate .map files for debugging
+    "removeComments": true,                      // Strip comments from output
+
+    /* Interop Constraints */
+    "esModuleInterop": true,                     // Better compatibility with CommonJS modules
+    "allowSyntheticDefaultImports": true,        // Allow default imports from modules without default export
+    "forceConsistentCasingInFileNames": true,    // Enforce consistent file name casing
+
+    /* Type Checking */
+    "strict": true,                              // Enable all strict type checking options
+    "noImplicitAny": true,                       // Error on expressions with implied 'any' type
+    "strictNullChecks": true,                    // Stricter null/undefined checking
+    "strictFunctionTypes": true,                 // Strict function type checking
+    "strictPropertyInitialization": true,        // Ensure class properties are initialized
+    "noImplicitThis": true,                      // Error on 'this' with implied 'any' type
+    "alwaysStrict": true,                        // Parse in strict mode and emit "use strict"
+
+    /* Additional Checks */
+    "noUnusedLocals": true,                      // Error on unused local variables
+    "noUnusedParameters": true,                  // Error on unused function parameters
+    "noImplicitReturns": true,                   // Error when not all code paths return a value
+    "noFallthroughCasesInSwitch": true,         // Error on fallthrough cases in switch
+
+    /* Completeness */
+    "skipLibCheck": true                         // Skip type checking of declaration files (faster builds)
+  },
+  "include": [
+    "src/**/*"                                   // Include all files in src directory
+  ],
+  "exclude": [
+    "node_modules",                              // Don't compile dependencies
+    "dist",                                      // Don't compile output
+    "**/*.test.ts",                              // Exclude test files from main build
+    "**/*.spec.ts"
+  ]
+}

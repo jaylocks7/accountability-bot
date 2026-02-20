@@ -5,19 +5,18 @@ const client = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(client);
 
 // Rate limiting tracking (in-memory, resets on Lambda cold start)
-const rateLimitMap = new Map(); // key: date, value: { count, resetTime }
+const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
 const RATE_LIMIT_MAX = 100; // max operations per minute per date
 const RATE_LIMIT_WINDOW = 60000; // 1 minute in ms
 
 // Helper function to sanitize text
-function sanitizeText(text) {
-  if (typeof text !== 'string') return '';
+function sanitizeText(text: string) {
   // Allow: alphanumeric, apostrophe, !, @, $, +, space
   return text.replace(/[^a-zA-Z0-9'\s!@$+]/g, '').trim();
 }
 
 // Helper function to check rate limit
-function checkRateLimit(date) {
+function checkRateLimit(date: string) {
   const now = Date.now();
   const limitData = rateLimitMap.get(date);
 
@@ -35,7 +34,7 @@ function checkRateLimit(date) {
 }
 
 // Helper function to reset rate limit (for testing purposes)
-function resetRateLimit(date) {
+function resetRateLimit(date?: string) {
   if (date) {
     rateLimitMap.delete(date);
   } else {
@@ -43,19 +42,20 @@ function resetRateLimit(date) {
   }
 }
 
+interface Task {
+  text: string;
+  completed: boolean;
+  priority: boolean;
+}
+
 //WRITE
 //Case 1 -- end of day check in to get task list for next day
 //Case 2 -- save a user msg to agent (ie i finished laundry!)
 //Case 3 -- save an agent response to user
-async function saveCheckIn(date, timestamp, type, tasks = [], message = "") {
+async function saveCheckIn(date: string, timestamp: number, type: string, tasks: Task[] = [], message = "") {
     //tasks: [
     // {text: "workout", completed: false, priority: true},
     //]
-
-    // Validate required fields
-    if (!date || typeof date !== 'string') {
-        throw new Error('Invalid date: must be a non-empty string');
-    }
 
     // Validate date format (YYYY-MM-DD)
     const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
@@ -75,7 +75,7 @@ async function saveCheckIn(date, timestamp, type, tasks = [], message = "") {
         throw new Error('Invalid day: must be between 01 and 31');
     }
 
-    if (!timestamp || typeof timestamp !== 'number' || timestamp <= 0) {
+    if (isNaN(timestamp)|| timestamp <= 0) {
         throw new Error('Invalid timestamp: must be a positive number');
     }
 
@@ -88,28 +88,12 @@ async function saveCheckIn(date, timestamp, type, tasks = [], message = "") {
     checkRateLimit(date);
 
     // Validate and sanitize tasks array
-    if (tasks && !Array.isArray(tasks)) {
-        throw new Error('Tasks must be an array');
-    }
-
     if (tasks.length > 30) {
         throw new Error('Too many tasks: maximum 30 tasks per list');
     }
 
     if (tasks.length > 0) {
         tasks = tasks.map((task, index) => {
-            if (!task || typeof task !== 'object') {
-                throw new Error(`Task ${index} must be an object`);
-            }
-            if (!task.text || typeof task.text !== 'string') {
-                throw new Error(`Task ${index} missing or invalid text field`);
-            }
-            if (typeof task.completed !== 'boolean') {
-                throw new Error(`Task ${index} missing or invalid completed field`);
-            }
-            if (typeof task.priority !== 'boolean') {
-                throw new Error(`Task ${index} missing or invalid priority field`);
-            }
 
             // Sanitize and validate length
             const sanitizedText = sanitizeText(task.text);
@@ -129,10 +113,6 @@ async function saveCheckIn(date, timestamp, type, tasks = [], message = "") {
     }
 
     // Validate and sanitize message
-    if (message && typeof message !== 'string') {
-        throw new Error('Message must be a string');
-    }
-
     if (message) {
         message = sanitizeText(message);
         if (message.length > 1000) {
@@ -140,19 +120,13 @@ async function saveCheckIn(date, timestamp, type, tasks = [], message = "") {
         }
     }
 
-    const item = {
-        date: date,
-        timestamp: timestamp,
-        type: type
-    }
-
-    // Add optional fields based on type
-    if (tasks.length > 0) {
-        item.tasks = tasks;
-    }
-    if (message) {
-        item.message = message;
-    }
+    const item: { date: string; timestamp: number; type: string; tasks?: Task[]; message?: string } = {
+      date,
+      timestamp,
+      type,
+      ...(tasks.length > 0 && { tasks }),
+      ...(message && { message }),
+  };
 
     const command = new PutCommand({
         TableName: "CheckIns",
@@ -165,7 +139,7 @@ async function saveCheckIn(date, timestamp, type, tasks = [], message = "") {
 }
 
 //READ
-async function getRecordsForDate(date) {
+async function getRecordsForDate(date: string) {
   const command = new QueryCommand({
     TableName: "CheckIns",
     KeyConditionExpression: "#date = :dateValue",
@@ -182,13 +156,23 @@ async function getRecordsForDate(date) {
 }
 
 //SPECIFIC READ
-async function getTasksForDate(date) {
+async function getTasksForDate(date: string) {
   const records = await getRecordsForDate(date);
-  return records.find(r => r.type === "task_list");
+  return records?.find(r => r.type === "task_list");
+}
+
+interface TaskUpdates {
+  complete?: number[];
+  uncomplete?: number[];
+  makePriority?: number[];
+  unmakePriority?: number[];
+  remove?: number[];
+  add?: string[];
+  updateText?: { index: number; text: string }[];
 }
 
 //BATCH UPDATE
-async function batchUpdateTasks(date, updates) {
+async function batchUpdateTasks(date: string, updates: TaskUpdates) {
   // updates = {
   //   complete: [0, 2],           // task indices to mark complete
   //   uncomplete: [1],            // task indices to mark incomplete
@@ -199,43 +183,13 @@ async function batchUpdateTasks(date, updates) {
   //   unmakePriority: [2]         // task indices to unmark as priority
   // }
 
-  // Validate date
-  if (!date || typeof date !== 'string') {
-    throw new Error('Invalid date: must be a non-empty string');
-  }
-
   // Rate limiting
   checkRateLimit(date);
 
-  // Validate updates object
-  if (!updates || typeof updates !== 'object') {
-    throw new Error('Updates must be an object');
-  }
-
-  // Validate index arrays (arrays of numbers)
-  const indexArrays = ['complete', 'uncomplete', 'makePriority', 'unmakePriority', 'remove'];
-  indexArrays.forEach(key => {
-    if (updates[key] !== undefined) {
-      if (!Array.isArray(updates[key])) {
-        throw new Error(`${key} must be an array`);
-      }
-      updates[key].forEach(index => {
-        if (!Number.isInteger(index) || index < 0) {
-          throw new Error(`${key} contains invalid index: ${index} (must be non-negative integer)`);
-        }
-      });
-    }
-  });
 
   // Validate and sanitize add array (array of strings)
   if (updates.add !== undefined) {
-    if (!Array.isArray(updates.add)) {
-      throw new Error('add must be an array');
-    }
     updates.add = updates.add.map((text, i) => {
-      if (typeof text !== 'string') {
-        throw new Error(`add[${i}] must be a string`);
-      }
       const sanitized = sanitizeText(text);
       if (sanitized.length === 0) {
         throw new Error(`add[${i}] is empty after sanitization`);
@@ -249,17 +203,11 @@ async function batchUpdateTasks(date, updates) {
 
   // Validate and sanitize updateText array
   if (updates.updateText !== undefined) {
-    if (!Array.isArray(updates.updateText)) {
-      throw new Error('updateText must be an array');
-    }
     updates.updateText = updates.updateText.map((update, i) => {
-      if (!update || typeof update !== 'object') {
-        throw new Error(`updateText[${i}] must be an object`);
-      }
       if (!Number.isInteger(update.index) || update.index < 0) {
         throw new Error(`updateText[${i}] has invalid index (must be non-negative integer)`);
       }
-      if (!update.text || typeof update.text !== 'string') {
+      if (!update.text) {
         throw new Error(`updateText[${i}] missing or invalid text field`);
       }
       const sanitized = sanitizeText(update.text);
@@ -287,7 +235,7 @@ async function batchUpdateTasks(date, updates) {
   // Step 2: Apply all updates
 
   // Mark tasks as complete
-  if (updates.complete?.length > 0) {
+  if (updates.complete?.length) {
     updates.complete.forEach(index => {
       if (tasks[index]) {
         tasks[index].completed = true;
@@ -296,7 +244,7 @@ async function batchUpdateTasks(date, updates) {
   }
 
   // Mark tasks as incomplete
-  if (updates.uncomplete?.length > 0) {
+  if (updates.uncomplete?.length) {
     updates.uncomplete.forEach(index => {
       if (tasks[index]) {
         tasks[index].completed = false;
@@ -305,7 +253,7 @@ async function batchUpdateTasks(date, updates) {
   }
 
   // Update task text/message
-  if (updates.updateText?.length > 0) {
+  if (updates.updateText?.length) {
     updates.updateText.forEach(update => {
       if (tasks[update.index]) {
         tasks[update.index].text = update.text;
@@ -314,7 +262,7 @@ async function batchUpdateTasks(date, updates) {
   }
 
   // Mark as priority
-  if (updates.makePriority?.length > 0) {
+  if (updates.makePriority?.length) {
     updates.makePriority.forEach(index => {
       if (tasks[index]) {
         tasks[index].priority = true;
@@ -323,7 +271,7 @@ async function batchUpdateTasks(date, updates) {
   }
 
   // Unmark as priority
-  if (updates.unmakePriority?.length > 0) {
+  if (updates.unmakePriority?.length) {
     updates.unmakePriority.forEach(index => {
       if (tasks[index]) {
         tasks[index].priority = false;
@@ -332,7 +280,7 @@ async function batchUpdateTasks(date, updates) {
   }
 
   // Remove tasks (do this AFTER other modifications, before adding)
-  if (updates.remove?.length > 0) {
+  if (updates.remove?.length) {
     // Sort in descending order to remove from end first (prevents index shifting)
     const sortedIndices = [...updates.remove].sort((a, b) => b - a);
     sortedIndices.forEach(index => {
@@ -343,7 +291,7 @@ async function batchUpdateTasks(date, updates) {
   }
 
   // Add new tasks (already sanitized above)
-  if (updates.add?.length > 0) {
+  if (updates.add?.length) {
     updates.add.forEach(taskText => {
       tasks.push({
         text: taskText,
@@ -376,9 +324,9 @@ async function batchUpdateTasks(date, updates) {
 }
 
 //DELETE - for cleanup/testing purposes
-async function deleteRecordsForDate(date) {
+async function deleteRecordsForDate(date: string) {
   // Get all records for the date
-  const records = await getRecordsForDate(date);
+  const records = await getRecordsForDate(date) ?? [];
 
   // Delete each record
   for (const record of records) {

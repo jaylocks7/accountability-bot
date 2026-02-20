@@ -13,14 +13,10 @@ const TELEGRAM_API_BASE = 'https://api.telegram.org';
  * @param {object} options - Optional parameters (parse_mode, reply_markup, etc.)
  * @returns {Promise<object>} - The Telegram API response
  */
-async function sendMessage(chatId, text, options = {}) {
+async function sendMessage(chatId: string, text: string, options = {}) {
   // Validate inputs
   if (!chatId) {
     throw new Error('chatId is required');
-  }
-
-  if (!text || typeof text !== 'string') {
-    throw new Error('text must be a non-empty string');
   }
 
   if (!BOT_TOKEN) {
@@ -53,7 +49,9 @@ async function sendMessage(chatId, text, options = {}) {
     };
   } catch (error) {
     // Handle errors from Telegram API
-    const errorMessage = error.response?.data?.description || error.message;
+    const errorMessage = error instanceof Error
+      ? error.message
+      : String(error);
 
     console.error('Telegram API error:', errorMessage);
 
