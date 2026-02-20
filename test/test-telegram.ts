@@ -1,6 +1,6 @@
 // Test script for Telegram sendMessage function
 import dotenv from 'dotenv';
-import { sendMessage } from '../src/services/telegram.js';
+import { sendMessage } from '../src/services/telegram.ts';
 
 // Load environment variables from .env file
 dotenv.config();
@@ -9,7 +9,7 @@ async function testTelegram() {
   console.log("🧪 Starting Telegram tests...\n");
 
   // Your chat ID from .env
-  const chatId = process.env.YOUR_TELEGRAM_CHAT_ID;
+  const chatId = process.env.YOUR_TELEGRAM_CHAT_ID!;
 
   try {
     // Test 1: Send a simple message
@@ -45,17 +45,17 @@ async function testTelegram() {
       await sendMessage(chatId, "");
       console.error("❌ Should have thrown error for empty text");
     } catch (error) {
-      console.log("✅ Correctly rejected empty text:", error.message);
+      console.log("✅ Correctly rejected empty text:", (error as Error).message);
     }
     console.log();
 
     // Test 4: Test validation - missing chatId
     console.log("4️⃣ Testing validation with missing chatId...");
     try {
-      await sendMessage(null, "Test message");
+      await sendMessage(null as unknown as string, "Test message");
       console.error("❌ Should have thrown error for missing chatId");
     } catch (error) {
-      console.log("✅ Correctly rejected missing chatId:", error.message);
+      console.log("✅ Correctly rejected missing chatId:", (error as Error).message);
     }
     console.log();
 
@@ -66,7 +66,7 @@ async function testTelegram() {
       await sendMessage(chatId, longText);
       console.error("❌ Should have thrown error for message over 4096 chars");
     } catch (error) {
-      console.log("✅ Correctly rejected long message:", error.message);
+      console.log("✅ Correctly rejected long message:", (error as Error).message);
     }
     console.log();
 
