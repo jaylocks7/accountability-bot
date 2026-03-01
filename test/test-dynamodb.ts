@@ -445,7 +445,7 @@ async function runAllTests() {
     console.log("\n🎉 All comprehensive tests passed!\n");
 
     // Cleanup test data
-    await cleanupTestData();
+    //await cleanupTestData();
 
   } catch (error) {
     console.error("\n❌ Test failed:", (error as Error).message);
