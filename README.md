@@ -42,7 +42,9 @@ task-bot/
 │   │   ├── telegram.ts             # Telegram bot wrapper [✅ Complete]
 │   │   └── dynamodb.ts             # Database operations [✅ Complete]
 │   └── test/
-│       └── test-webhook.ts         # Manual webhook test with mock event
+│       ├── test-webhook.ts         # Manual webhook test with mock event
+│       ├── test-telegram.ts        # Telegram service test
+│       └── test-dynamodb.ts        # DynamoDB service test
 ├── dist/                           # Compiled JS output (git-ignored)
 ├── package.json
 ├── tsconfig.json
