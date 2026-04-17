@@ -34,15 +34,18 @@ An AI accountability bot that:
 ```
 task-bot/
 ├── src/
-│   ├── index.js                    # Main Lambda handler (routes events)
+│   ├── index.ts                    # Main Lambda handler (routes events)
 │   ├── handlers/
-│   │   ├── checkIn.js              # Scheduled check-ins (9 AM, 6 PM, 9 PM)
-│   │   └── webhook.js              # Incoming Telegram messages
+│   │   ├── checkIn.ts              # Scheduled check-ins (9 AM, 6 PM, 9 PM)
+│   │   └── webhook.ts              # Incoming Telegram messages [✅ Complete]
 │   ├── services/
-│   │   ├── telegram.js             # Telegram bot wrapper [✅ Complete]
-│   │   └── dynamodb.js             # Database operations [✅ Complete]
-├── tests/                          # Service tests [✅ Complete]
+│   │   ├── telegram.ts             # Telegram bot wrapper [✅ Complete]
+│   │   └── dynamodb.ts             # Database operations [✅ Complete]
+│   └── test/
+│       └── test-webhook.ts         # Manual webhook test with mock event
+├── dist/                           # Compiled JS output (git-ignored)
 ├── package.json
+├── tsconfig.json
 ├── .env                            # Local secrets (git-ignored)
 ├── .env.example                    # Environment variable template
 └── README.md
@@ -97,20 +100,20 @@ AWS_REGION=us-east-1
 4. **Anytime**: Report completions → bot celebrates and shows remaining tasks
 
 ### Data Storage
-Tasks are stored in DynamoDB with this structure:
-```javascript
+Tasks are stored in DynamoDB (`CheckIns` table) with this structure:
+```typescript
 {
-  id: String,              // UUID
-  timestamp: Number,       // Unix timestamp
-  date: String,            // YYYY-MM-DD
-  type: String,            // "prompt" | "response" | "task_list" | "completion" | "check_in"
-  message: String,         // Message text
+  date: string,            // PK — YYYY-MM-DD (Pacific time)
+  timestamp: number,       // SK — Unix timestamp ms
+  type: string,            // "task_list" | "user_input" | "ai_output"
   tasks: [                 // Task array (for task_list type)
     {
-      task: String,
-      completed: Boolean
+      text: string,
+      completed: boolean,
+      priority: boolean
     }
-  ]
+  ],
+  message?: string         // Message text (for user_input / ai_output types)
 }
 ```
 
@@ -118,26 +121,27 @@ Tasks are stored in DynamoDB with this structure:
 
 ### ✅ Complete
 - Core services (Telegram, DynamoDB)
-- Service tests
-- Project structure
+- Main Lambda router (`src/index.ts`)
+- Webhook handler (`src/handlers/webhook.ts`) — tested with manual mock event
+- Tests for webhook, Telegram, and DynamoDB (`src/test/`)
 
 ### 🚧 In Progress
-- Handler implementation ([checkIn.js](src/handlers/checkIn.js), [webhook.js](src/handlers/webhook.js))
-- Main Lambda router ([index.js](src/index.js))
+- Check-in handlers (`src/handlers/checkIn.ts`)
+- End-to-end testing from Telegram directly
 
 ### 📋 Todo
-- AWS infrastructure setup
-- End-to-end testing
-- Deployment
+- Deploy to AWS Lambda
+- Set Telegram webhook URL to API Gateway endpoint
+- End-to-end testing via real Telegram messages
 
 ## Testing Locally
 
 ```bash
-# Run service tests
-npm test
+# Compile TypeScript
+npx tsc
 
-# Test individual functions with .env loaded
-node --env-file=.env src/services/telegram.js
+# Run webhook handler with mock event (tests DynamoDB + Claude + Telegram)
+node dist/test/test-webhook.js
 ```
 
 ## Future Ideas
