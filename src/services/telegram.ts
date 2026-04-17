@@ -19,6 +19,10 @@ async function sendMessage(chatId: string, text: string, options = {}) {
     throw new Error('chatId is required');
   }
 
+  if (!text) {
+    throw new Error('text is required')
+  }
+
   if (!BOT_TOKEN) {
     throw new Error('TELEGRAM_BOT_TOKEN environment variable is not set');
   }

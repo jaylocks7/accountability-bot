@@ -1,6 +1,6 @@
 // Test script for Telegram sendMessage function
 import dotenv from 'dotenv';
-import { sendMessage } from '../src/services/telegram.ts';
+import { sendMessage } from '../services/telegram.js';
 
 // Load environment variables from .env file
 dotenv.config();

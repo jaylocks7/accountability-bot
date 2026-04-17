@@ -1,6 +1,6 @@
 // Comprehensive test script for DynamoDB functions
 import assert from 'assert';
-import { saveCheckIn, getRecordsForDate, getTasksForDate, batchUpdateTasks, deleteRecordsForDate, resetRateLimit } from '../src/services/dynamodb.ts';
+import { saveCheckIn, getRecordsForDate, getTasksForDate, batchUpdateTasks, deleteRecordsForDate, resetRateLimit } from '../services/dynamodb.js';
 
 // Use a date from the distant past to avoid conflicts with real data
 const TEST_DATE = "2000-01-01";
@@ -445,7 +445,7 @@ async function runAllTests() {
     console.log("\n🎉 All comprehensive tests passed!\n");
 
     // Cleanup test data
-    //await cleanupTestData();
+    await cleanupTestData();
 
   } catch (error) {
     console.error("\n❌ Test failed:", (error as Error).message);

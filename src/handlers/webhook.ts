@@ -1,7 +1,12 @@
-import { getTasksForDate, batchUpdateTasks } from "../services/dynamodb";
+import { getTasksForDate, batchUpdateTasks } from "../services/dynamodb.js";
 import Anthropic from '@anthropic-ai/sdk';
 import { APIGatewayProxyEvent } from 'aws-lambda';
-import { sendMessage } from "../services/telegram";
+import { sendMessage } from "../services/telegram.js";
+import dotenv from 'dotenv';
+dotenv.config();
+console.log("API key loaded:", !!process.env.ANTHROPIC_API_KEY);
+
+
 
 
 const tools: Anthropic.Messages.ToolUnion[] = [
@@ -36,6 +41,30 @@ const mockEvent = {
 };
 */
 
+const client = new Anthropic()
+
+async function formatTasks(date: string) {
+    let taskRecord;
+    try {
+        taskRecord = await getTasksForDate(date);
+    } catch (error) {
+        throw new Error(`Failed to fetch tasks: ${error}`);
+    }
+    const tasks = taskRecord?.tasks || [];
+
+
+    const formattedTasks = tasks.map((task: Record<string, any>, index: number) => {
+        const checkbox = task?.completed ? 'done! ': '';
+        const star = task?.priority ? '* ': '';
+        const taskText = task?.text;
+        return `${index}. ${checkbox} ${star} ${taskText}`
+    });
+
+    const result = formattedTasks.join('\n');
+
+    return result;
+}
+
 
 async function handleWebhook(event: APIGatewayProxyEvent) {
     if (!event.body) {
@@ -59,23 +88,7 @@ async function handleWebhook(event: APIGatewayProxyEvent) {
     const date = formatter.format(new Date());
     // "2026-03-10" (in Pacific time)
 
-    let taskRecord;
-    try {
-        taskRecord = await getTasksForDate(date);
-    } catch (error) {
-        throw new Error(`Failed to fetch tasks: ${error}`);
-    }
-    const tasks = taskRecord?.tasks || [];
-
-
-    const formattedTasks = tasks.map((task: Record<string, any>, index: number) => {
-        const checkbox = task?.completed ? 'done! ': '';
-        const star = task?.priority ? '* ': '';
-        const taskText = task?.text;
-        return `${index}. ${checkbox} ${star} ${taskText}`
-    });
-
-    const result = formattedTasks.join('\n');
+    const result = await formatTasks(date);
 
     const systemPrompt = `
         You are a friendly but firm accountability coach helping users manage their daily tasks.
@@ -103,18 +116,14 @@ async function handleWebhook(event: APIGatewayProxyEvent) {
         - Redirect off-topic conversations back to tasks
     `;
 
-    //const api_key = process.env.ANTHROPIC_API_KEY;
-
-    const client = new Anthropic()
-
-    const msg_to_ai = `${result}\n${userMessage}`
+    const msgToAI = `${result}\n${userMessage}`
 
     const response = await client.messages.create({
         model: "claude-sonnet-4-5-20250929",
         max_tokens: 1024,
         system: systemPrompt,
         messages: [
-            { role: "user", content: msg_to_ai}
+            { role: "user", content: msgToAI}
         ],
         tools: tools
     })
@@ -137,7 +146,7 @@ async function handleWebhook(event: APIGatewayProxyEvent) {
         for (const block of response.content) {
             if (block.type === "tool_use") {
                     switch (block.name) {
-                        case "complete_tasks":
+                        case "complete_tasks": {
                             // call batchUpdateTasks with completed: true
                             const input = block.input as { task_indices: number[] };
                             const indices = input.task_indices;
@@ -146,9 +155,46 @@ async function handleWebhook(event: APIGatewayProxyEvent) {
                             } catch (error) {
                                 throw new Error(`Tool Call complete_tasks failed to update tasks: ${error}`);
                             }
+                            break;
+                        }   
+                    }
+                    const updatedTasks = await formatTasks(date);
+
+                    const messages: Anthropic.Messages.MessageParam[] = [
+                        // 1. Original user message (same as first call)
+                        { 
+                            role: "user", 
+                            content: msgToAI 
+                        },
+                        // 2. Claude's first response (the tool_use blocks)
+                        { 
+                            role: "assistant", 
+                            content: response.content 
+                        },
+                        // 3. Tool result — what happened when you executed the tool
+                        { 
+                            role: "user", 
+                            content: [{
+                                type: "tool_result",
+                                tool_use_id: block.id,
+                                content: `Tasks updated successfully. Current task list:\n${updatedTasks}`
+                            }]
+                        }
+                    ]
+
+                    const secondResponse = await client.messages.create({
+                        model: "claude-sonnet-4-5-20250929",
+                        max_tokens: 1024,
+                        system: systemPrompt,
+                        messages: messages,
+                        tools: tools
+                    })
+
+                    const textBlock = secondResponse.content.find(block => block.type === "text");
+                    if (textBlock && textBlock.type === "text") {
+                        text = textBlock.text;
                     }
                 }
-
             }
     }
 
@@ -158,7 +204,6 @@ async function handleWebhook(event: APIGatewayProxyEvent) {
     }
 
     await sendMessage(chatId, text)
-
 
     return;
 }

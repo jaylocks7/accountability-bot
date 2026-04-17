@@ -1,7 +1,8 @@
 import { morningCheckIn, afternoonCheckIn, eveningPrompt } from "./handlers/checkIn";
 import { handleWebhook } from "./handlers/webhook";
 
-export const handler = async (event, context) => {
+
+export const handler = async (event: any, _context: any) => {
   // AWS passes 'event' to you (you don't create it)
   // Inspect the event object to determine source
   // Return a response
