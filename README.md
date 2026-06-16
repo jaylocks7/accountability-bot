@@ -4,7 +4,7 @@
 
 I have to-do lists I make for myself every night for the next day. They sit as a text to myself in the Signal App on my phone. When the next day arrives, I go to the text in my phone and delete any tasks I accomplish as I complete them. However the text can easily get buried under other notes I make throughout the day, and if I have any leftover tasks at the day's end I have to add them (if I remember) to the next list.
 
-I want a lightweight, dedicated place for my to-do list tasks for the day. I also want to keep track of how long I've had a task for, and have it prioritized in my to-do list. I thrive in environments of accountability, so the idea of an AI-coach came to mind.
+I want a lightweight, dedicated place for my to-do list tasks for the day. I thrive in environments of accountability, so the idea of an AI-coach came to mind.
 
 ## What It Does
 
