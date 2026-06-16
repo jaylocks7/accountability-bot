@@ -1,4 +1,4 @@
-# You Got This Bot
+# Accountability Bot
 
 ## Idea
 
@@ -10,19 +10,19 @@ I want a lightweight, dedicated place for my to-do list tasks for the day. I als
 
 An AI accountability bot that:
 - Gathers your to-do list tasks the night before (9 PM PT)
-- Aggregates leftover tasks from previous days if you choose
-- Remembers how long tasks remain undone and prioritizes accordingly
+- Aggregates leftover tasks from previous day if you choose
 - Checks in throughout the day to remind and encourage you (9 AM, 6 PM PT)
 - Provides your current task list on request
-- Asks thoughtful questions about long-standing tasks ("Why is this important?" "Can we break this down?")
-- Lets you clear or delete tasks
+- Lets you add new tasks
+- Lets you complete or un-complete tasks
+- Lets you remove tasks
+- Lets you set or unset task priority
 - Interfaces via Telegram messages
-- Is friendly yet firm
-- Celebrates your wins and gives you space after completing tasks
+- Is friendly yet firm, celebrates you on task completions
 
 ## Tech Stack
 
-- **AI**: Claude Opus 4.5 (Anthropic API)
+- **AI**: Claude Sonnet 4.6 (Anthropic API)
 - **Messaging**: Telegram Bot API
 - **Backend**: AWS Lambda (Node.js 20.x)
 - **Database**: AWS DynamoDB
@@ -49,7 +49,6 @@ task-bot/
 ├── package.json
 ├── tsconfig.json
 ├── .env                            # Local secrets (git-ignored)
-├── .env.example                    # Environment variable template
 └── README.md
 ```
 
@@ -87,19 +86,18 @@ AWS_REGION=us-east-1
 2. Deploy Lambda function (zip and upload via AWS Console/CLI)
 3. Create API Gateway HTTP endpoint, integrate with Lambda
 4. Set Telegram webhook: `https://api.telegram.org/bot<TOKEN>/setWebhook?url=<API_GATEWAY_URL>`
-5. Create 3 EventBridge rules with cron expressions:
-   - Morning (9 AM PT): `cron(0 17 * * ? *)`
-   - Afternoon (6 PM PT): `cron(0 2 * * ? *)`
-   - Evening (9 PM PT): `cron(0 5 * * ? *)`
-6. Add environment variables to Lambda configuration
+5. Add environment variables to Lambda configuration
+
+### 6. Start comms with bot
+1. TBD
 
 ## How It Works
 
 ### Daily Flow
 1. **9 PM**: Bot asks for tomorrow's tasks + option to carry over incomplete tasks
 2. **9 AM**: Personalized morning check-in based on your task list
-3. **6 PM**: Afternoon progress check
-4. **Anytime**: Report completions → bot celebrates and shows remaining tasks
+3. **6 PM**: Personalized afternoon progress check
+4. **Anytime**: Report completions or make any updates to task list → bot will make toolcalls and personalized responses accordingly
 
 ### Data Storage
 Tasks are stored in DynamoDB (`CheckIns` table) with this structure:
@@ -145,24 +143,6 @@ npx tsc
 # Run webhook handler with mock event (tests DynamoDB + Claude + Telegram)
 node dist/test/test-webhook.js
 ```
-
-## Future Ideas
-
-- Task priority scoring based on age
-- Weekly review summaries
-- Natural language task parsing improvements
-- Multi-user support (would require server running 24/7)
-- Custom check-in schedules per user
-
-## Cost Estimate
-
-Using AWS free tier:
-- Lambda: Free (1M requests/month)
-- DynamoDB: Free (25GB storage, 25 WCU/RCU)
-- API Gateway: Free (1M requests/month)
-- Claude API: ~$2.70/month (6 calls/day with Opus 4.5)
-
-**Total: ~$3/month**
 
 ## License
 

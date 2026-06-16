@@ -11,22 +11,107 @@ console.log("API key loaded:", !!process.env.ANTHROPIC_API_KEY);
 
 const tools: Anthropic.Messages.ToolUnion[] = [
     {
-    "name": "complete_tasks",
-    "description": "Mark one or more tasks as completed",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "task_indices": {
-                "type": "array",
-                "items": {
-                    "type": "number"
-                },
-                "description": "Array of zero-based task indices to mark as complete (e.g., [0, 2, 5])"
-            }
-        },
-        "required": ["task_indices"]
-    }
-}
+        "name": "complete_tasks",
+        "description": "Mark one or more tasks as completed",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_indices": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    },
+                    "description": "Array of zero-based task indices to mark as complete (e.g., [0, 2, 5])"
+                }
+            },
+            "required": ["task_indices"]
+        }
+    },
+    {
+        "name": "uncomplete_tasks",
+        "description": "Mark one or more tasks as incomplete",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tasks_indices": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    },
+                    "description": "Array of zero-based task indices to mark as incomplete (e.g., [0, 2, 5])"
+                }
+            },
+            "required": ["tasks_indices"]
+        }
+    },
+    {
+        "name": "add_tasks",
+        "description": "Add one or more tasks to tasks list",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tasks": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "description": "Array of strings representing to-do list tasks to add to the running to-do list"
+                }
+            },
+            "required": ["tasks"]
+        }
+    },
+    {
+        "name": "remove_tasks",
+        "description": "Remove one or more tasks to tasks list",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tasks_indices": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    },
+                    "description": "Array of zero-based task indices to pertaining to tasks to delete (e.g., [0, 2, 5])"
+                }
+            },
+            "required": ["tasks_indices"]
+        }
+    },
+    {
+        "name": "set_priority",
+        "description": "Mark one or more tasks as priority",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tasks_indices": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    },
+                    "description": "Array of zero-based task indices to pertaining to tasks to set priority to true (e.g., [0, 2, 5])"
+                }
+            },
+            "required": ["tasks_indices"]
+        }
+    },
+    {
+        "name": "unset_priority",
+        "description": "Mark one or more tasks as not priority",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tasks_indices": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    },
+                    "description": "Array of zero-based task indices to pertaining to tasks to set priority to false (e.g., [0, 2, 5])"
+                }
+            },
+            "required": ["tasks_indices"]
+        }
+    },
 ]
 
 /*
@@ -57,7 +142,7 @@ async function formatTasks(date: string) {
         const checkbox = task?.completed ? 'done! ': '';
         const star = task?.priority ? '* ': '';
         const taskText = task?.text;
-        return `${index}. ${checkbox} ${star} ${taskText}`
+        return `${index}. ${checkbox} ${taskText} ${star}`
     });
 
     const result = formattedTasks.join('\n');
@@ -94,7 +179,7 @@ async function handleWebhook(event: APIGatewayProxyEvent) {
         You are a friendly but firm accountability coach helping users manage their daily tasks.
 
         Current tasks are shown in this format:
-        [index]. [done!] [*] [task text]
+        [index]. [done!] [task text] [*]
         - Index: 0, 1, 2, ...
         - "done!" = completed
         - "*" = priority
@@ -106,6 +191,11 @@ async function handleWebhook(event: APIGatewayProxyEvent) {
 
         Tool usage:
         - When user says they completed/finished/did task(s), immediately use complete_tasks tool with the task indices
+        - When user says they want to make completed task(s) as incomplete, immediately use uncomplete_tasks tool with the task indices
+        - When user wants to add a new task(s), immediately use add_tasks tool with the task(s) to add
+        - When user wants to delete a task(s) from the list, immediately use remove_tasks tool with the task indices
+        - When user wants to set priority of task(s) to true, immediately use set_priority tool with the task indices
+        - When user wants to set priority of task(s) to false, immediately use unset_priority tool with the task indices
         - Don't just acknowledge - actually call the tool to update tasks
         - Don't ask permission - just do it
 
@@ -132,7 +222,7 @@ async function handleWebhook(event: APIGatewayProxyEvent) {
 
     console.log("stop_reason:", response.stop_reason);
     console.log("response content:", JSON.stringify(response.content, null, 2));
-
+    const toolResults = [];
 
     if (response.stop_reason === "max_tokens") {
         throw new Error("Claude response was cut off — increase max_tokens");
@@ -145,57 +235,107 @@ async function handleWebhook(event: APIGatewayProxyEvent) {
     } else if (response.stop_reason === "tool_use") {
         for (const block of response.content) {
             if (block.type === "tool_use") {
-                    switch (block.name) {
-                        case "complete_tasks": {
-                            // call batchUpdateTasks with completed: true
-                            const input = block.input as { task_indices: number[] };
-                            const indices = input.task_indices;
-                            try {
-                                await batchUpdateTasks(date, { complete: indices })
-                            } catch (error) {
-                                throw new Error(`Tool Call complete_tasks failed to update tasks: ${error}`);
-                            }
-                            break;
-                        }   
-                    }
-                    const updatedTasks = await formatTasks(date);
-
-                    const messages: Anthropic.Messages.MessageParam[] = [
-                        // 1. Original user message (same as first call)
-                        { 
-                            role: "user", 
-                            content: msgToAI 
-                        },
-                        // 2. Claude's first response (the tool_use blocks)
-                        { 
-                            role: "assistant", 
-                            content: response.content 
-                        },
-                        // 3. Tool result — what happened when you executed the tool
-                        { 
-                            role: "user", 
-                            content: [{
-                                type: "tool_result",
-                                tool_use_id: block.id,
-                                content: `Tasks updated successfully. Current task list:\n${updatedTasks}`
-                            }]
+                switch (block.name) {
+                    case "complete_tasks": {
+                        // call batchUpdateTasks with completed: true
+                        const input = block.input as { task_indices: number[] };
+                        const indices = input.task_indices;
+                        try {
+                            await batchUpdateTasks(date, { complete: indices })
+                        } catch (error) {
+                            throw new Error(`Tool Call complete_tasks failed to update tasks: ${error}`);
                         }
-                    ]
-
-                    const secondResponse = await client.messages.create({
-                        model: "claude-sonnet-4-5-20250929",
-                        max_tokens: 1024,
-                        system: systemPrompt,
-                        messages: messages,
-                        tools: tools
-                    })
-
-                    const textBlock = secondResponse.content.find(block => block.type === "text");
-                    if (textBlock && textBlock.type === "text") {
-                        text = textBlock.text;
+                        break;
+                    }
+                    case "uncomplete_tasks": {
+                        // call batchUpdateTasks with completed: true
+                        const input = block.input as { tasks_indices: number[] };
+                        const indices = input.tasks_indices;
+                        try {
+                            await batchUpdateTasks(date, { uncomplete: indices })
+                        } catch (error) {
+                            throw new Error(`Tool Call uncomplete_tasks failed to update tasks: ${error}`);
+                        }
+                        break;
+                    }
+                    case "add_tasks": {
+                        const input = block.input as { tasks: string[] };
+                        const tasks = input.tasks
+                        try {
+                            await batchUpdateTasks(date, { add: tasks })
+                        } catch (error) {
+                            throw new Error(`Tool Call add_tasks failed to update tasks: ${error}`);
+                        }
+                        break;
+                    }
+                    case "remove_tasks": {
+                        const input = block.input as { tasks_indices: number[] };
+                        const indices = input.tasks_indices
+                        try {
+                            await batchUpdateTasks(date, { remove: indices })
+                        } catch (error) {
+                            throw new Error(`Tool Call remove_tasks failed to update tasks: ${error}`);
+                        }
+                        break;
+                    }
+                    case "set_priority": {
+                        const input = block.input as { tasks_indices: number[] };
+                        const indices = input.tasks_indices;
+                        try {
+                            await batchUpdateTasks(date, { makePriority: indices });
+                        } catch (error) {
+                            throw new Error(`Tool Call set_priority failed to update tasks: ${error}`);
+                        }
+                        break;
+                    }
+                    case "unset_priority": {
+                        const input = block.input as { tasks_indices: number[] };
+                        const indices = input.tasks_indices;
+                        try {
+                            await batchUpdateTasks(date, { unmakePriority: indices });
+                        } catch (error) {
+                            throw new Error(`Tool Call unset_priority failed to update tasks: ${error}`);
+                        }
+                        break;
                     }
                 }
+                const updatedTasks = await formatTasks(date);
+                toolResults.push({
+                    type: "tool_result",
+                    tool_use_id: block.id,
+                    content: `Tasks updated. Current list:\n${updatedTasks}`
+                });
+
+                
             }
+        }
+        const messages: Anthropic.Messages.MessageParam[] = [
+            {
+                role: "user",
+                content: msgToAI
+            },
+            {
+                role: "assistant",
+                content: response.content
+            },
+            {
+                role: "user",
+                content: toolResults as Anthropic.Messages.ToolResultBlockParam[]
+            }
+        ]
+
+        const secondResponse = await client.messages.create({
+            model: "claude-sonnet-4-5-20250929",
+            max_tokens: 1024,
+            system: systemPrompt,
+            messages: messages,
+            tools: tools
+        })
+
+        const textBlock = secondResponse.content.find(block => block.type === "text");
+        if (textBlock && textBlock.type === "text") {
+            text = textBlock.text;
+        }
     }
 
 
