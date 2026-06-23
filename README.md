@@ -6,6 +6,10 @@ I have to-do lists I make for myself every night for the next day. They sit as a
 
 I want a lightweight, dedicated place for my to-do list tasks for the day. I thrive in environments of accountability, so the idea of an AI-coach came to mind.
 
+## Write-up Link
+
+https://docs.google.com/document/d/17B3Z3SAH23Xhk0OQro4uNtT3blvqxdqAQUJTl5Nz_HM/edit?usp=sharing
+
 ## What It Does
 
 An AI accountability bot that:
@@ -99,7 +103,7 @@ task-bot/
 After 6 consecutive check-ins with no user response, the bot sends a sleep message and stops initiating. Any message from the user resets the counter and resumes normal check-ins.
 
 ### Task Rollover
-At the 11 PM check-in, incomplete tasks are automatically carried over to tomorrow's list. This defaults to ON and can be toggled by the user at any time.
+At the 11 PM check-in, incomplete tasks are automatically carried over to tomorrow's list. This defaults to OFF and can be toggled by the user at any time ("can you turn on task rollover?")
 
 ## Data Storage
 
