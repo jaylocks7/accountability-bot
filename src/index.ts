@@ -1,5 +1,5 @@
-import { morningCheckIn, afternoonCheckIn, eveningPrompt } from "./handlers/checkIn";
-import { handleWebhook } from "./handlers/webhook";
+import { morningCheckIn, afternoonCheckIn, eveningPrompt } from "./handlers/checkIn.js";
+import { handleWebhook } from "./handlers/webhook.js";
 
 
 export const handler = async (event: any, _context: any) => {
@@ -24,7 +24,8 @@ export const handler = async (event: any, _context: any) => {
     try {
         await handleWebhook(event);
     } catch (error) {
-      return {statusCode: 400, body: error}
+      console.error('handleWebhook error:', error);
+      return {statusCode: 400, body: String(error)}
     }
     return { statusCode: 200, body: 'OK'}
   } else {

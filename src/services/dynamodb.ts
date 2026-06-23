@@ -1,5 +1,5 @@
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { PutCommand, QueryCommand, UpdateCommand, DeleteCommand, DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
+import { PutCommand, QueryCommand, UpdateCommand, DeleteCommand, GetCommand, DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
 
 const client = new DynamoDBClient({region: "us-east-2"});
 const docClient = DynamoDBDocumentClient.from(client);
@@ -124,7 +124,7 @@ async function saveCheckIn(date: string, timestamp: number, type: string, tasks:
       date,
       timestamp,
       type,
-      ...(tasks.length > 0 && { tasks }),
+      ...(tasks.length > 0 || type === 'task_list' ? { tasks } : {}),
       ...(message && { message }),
   };
 
@@ -226,11 +226,11 @@ async function batchUpdateTasks(date: string, updates: TaskUpdates) {
 
   // Step 1: Get current task list
   const taskRecord = await getTasksForDate(date);
-  if (!taskRecord || !taskRecord.tasks) {
+  if (!taskRecord) {
     throw new Error(`No task list found for ${date}`);
   }
 
-  let tasks = [...taskRecord.tasks];
+  let tasks = [...(taskRecord.tasks ?? [])];
 
   // Step 2: Apply all updates
 
@@ -343,6 +343,69 @@ async function deleteRecordsForDate(date: string) {
   return records.length;
 }
 
+// EVENING SESSION — stored at fixed key { date: "session", timestamp: 0 }
+async function getEveningSession(): Promise<boolean> {
+    const command = new GetCommand({
+        TableName: "CheckIns",
+        Key: { date: "session", timestamp: 0 }
+    });
+    const response = await docClient.send(command);
+    return response.Item?.active === true;
+}
+
+async function setEveningSession(active: boolean): Promise<void> {
+    const command = new PutCommand({
+        TableName: "CheckIns",
+        Item: { date: "session", timestamp: 0, type: "evening_session", active }
+    });
+    await docClient.send(command);
+}
+
+// PREFERENCES — stored at fixed key { date: "settings", timestamp: 0 }
+async function getPreferences(): Promise<{ autoRollover: boolean; missedCheckIns: number }> {
+    const command = new GetCommand({
+        TableName: "CheckIns",
+        Key: { date: "settings", timestamp: 0 }
+    });
+    const response = await docClient.send(command);
+    return {
+        autoRollover: response.Item?.autoRollover ?? true,
+        missedCheckIns: response.Item?.missedCheckIns ?? 0
+    };
+}
+
+async function setAutoRollover(value: boolean): Promise<void> {
+    const command = new UpdateCommand({
+        TableName: "CheckIns",
+        Key: { date: "settings", timestamp: 0 },
+        UpdateExpression: "SET autoRollover = :val",
+        ExpressionAttributeValues: { ":val": value }
+    });
+    await docClient.send(command);
+}
+
+async function resetMissedCheckIns(): Promise<void> {
+    const command = new UpdateCommand({
+        TableName: "CheckIns",
+        Key: { date: "settings", timestamp: 0 },
+        UpdateExpression: "SET missedCheckIns = :zero, lastResponse = :now",
+        ExpressionAttributeValues: { ":zero": 0, ":now": Date.now() }
+    });
+    await docClient.send(command);
+}
+
+async function incrementMissedCheckIns(): Promise<number> {
+    const command = new UpdateCommand({
+        TableName: "CheckIns",
+        Key: { date: "settings", timestamp: 0 },
+        UpdateExpression: "SET missedCheckIns = if_not_exists(missedCheckIns, :zero) + :one",
+        ExpressionAttributeValues: { ":zero": 0, ":one": 1 },
+        ReturnValues: "UPDATED_NEW"
+    });
+    const response = await docClient.send(command);
+    return response.Attributes?.missedCheckIns as number;
+}
+
 // Export functions
-export { saveCheckIn, getRecordsForDate, getTasksForDate, batchUpdateTasks, deleteRecordsForDate, resetRateLimit };
+export { saveCheckIn, getRecordsForDate, getTasksForDate, batchUpdateTasks, deleteRecordsForDate, resetRateLimit, getEveningSession, setEveningSession, getPreferences, setAutoRollover, resetMissedCheckIns, incrementMissedCheckIns };
 

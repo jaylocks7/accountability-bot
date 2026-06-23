@@ -45,6 +45,7 @@
     "node_modules",                              // Don't compile dependencies
     "dist",                                      // Don't compile output
     "**/*.test.ts",                              // Exclude test files from main build
-    "**/*.spec.ts"
+    "**/*.spec.ts",
+    "src/test/**/*"                              // Exclude local test scripts from Lambda build
   ]
 }

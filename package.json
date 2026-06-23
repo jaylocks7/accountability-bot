@@ -25,12 +25,12 @@
     "@anthropic-ai/sdk": "^0.71.2",
     "@aws-sdk/client-dynamodb": "^3.956.0",
     "@aws-sdk/lib-dynamodb": "^3.956.0",
-    "axios": "^1.13.2"
+    "axios": "^1.13.2",
+    "dotenv": "^17.2.3"
   },
   "devDependencies": {
     "@types/aws-lambda": "^8.10.161",
     "@types/node": "^25.0.6",
-    "dotenv": "^17.2.3",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   }
