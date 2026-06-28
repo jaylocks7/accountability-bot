@@ -1,4 +1,4 @@
-import { getTasksForDate, batchUpdateTasks, saveCheckIn, getEveningSession, setEveningSession, setAutoRollover, resetMissedCheckIns } from "../services/dynamodb.js";
+import { getTasksForDate, batchUpdateTasks, saveCheckIn, getEveningSession, setEveningSession, setAutoRollover, resetMissedCheckIns, getPreferences } from "../services/dynamodb.js";
 import Anthropic from '@anthropic-ai/sdk';
 import { APIGatewayProxyEvent } from 'aws-lambda';
 import { sendMessage } from "../services/telegram.js";
@@ -233,7 +233,12 @@ async function handleWebhook(event: APIGatewayProxyEvent) {
 
     const existingTaskList = await getTasksForDate(date);
     if (!existingTaskList) {
-        await saveCheckIn(date, Date.now(), 'task_list', []);
+        const prefs = await getPreferences();
+        const yesterday = await getTasksForDate(getDatePT(-1));
+        const incomplete = prefs.autoRollover
+            ? (yesterday?.tasks ?? []).filter((t: any) => !t.completed).map((t: any) => ({ ...t, completed: false }))
+            : [];
+        await saveCheckIn(date, Date.now(), 'task_list', incomplete);
     }
 
     await resetMissedCheckIns();
@@ -395,7 +400,15 @@ async function handleWebhook(event: APIGatewayProxyEvent) {
                             if (existingTomorrow) {
                                 await batchUpdateTasks(tomorrow, { add: input.tasks });
                             } else {
-                                const newTasks = input.tasks.map(text => ({ text, completed: false, priority: false }));
+                                const prefs = await getPreferences();
+                                const todayRecord = await getTasksForDate(date);
+                                const incomplete = prefs.autoRollover
+                                    ? (todayRecord?.tasks ?? []).filter((t: any) => !t.completed).map((t: any) => ({ ...t, completed: false }))
+                                    : [];
+                                const newTasks = [
+                                    ...incomplete,
+                                    ...input.tasks.map(text => ({ text, completed: false, priority: false }))
+                                ];
                                 await saveCheckIn(tomorrow, Date.now(), 'task_list', newTasks);
                             }
                             await setEveningSession(false);

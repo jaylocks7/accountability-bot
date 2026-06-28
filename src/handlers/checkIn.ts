@@ -1,4 +1,4 @@
-import { getTasksForDate, saveCheckIn, getPreferences, setEveningSession, incrementMissedCheckIns } from '../services/dynamodb.js';
+import { getTasksForDate, getPreferences, setEveningSession, incrementMissedCheckIns } from '../services/dynamodb.js';
 import { sendMessage } from '../services/telegram.js';
 import Anthropic from '@anthropic-ai/sdk';
 import dotenv from 'dotenv';
@@ -91,7 +91,6 @@ async function afternoonCheckIn() {
 async function eveningPrompt() {
     if (!await checkShouldProceed()) return;
     const today = getDatePT();
-    const tomorrow = getDatePT(1);
 
     const [taskRecord, prefs] = await Promise.all([
         getTasksForDate(today),
@@ -99,15 +98,6 @@ async function eveningPrompt() {
     ]);
 
     const incomplete = taskRecord?.tasks?.filter((t: any) => !t.completed) ?? [];
-
-    if (prefs.autoRollover && incomplete.length > 0) {
-        const rolledOver = incomplete.map((t: any) => ({
-            text: t.text,
-            completed: false,
-            priority: t.priority
-        }));
-        await saveCheckIn(tomorrow, Date.now(), 'task_list', rolledOver);
-    }
 
     await setEveningSession(true);
 
@@ -117,8 +107,8 @@ async function eveningPrompt() {
     } else {
         const taskLines = incomplete.map((t: any) => `- ${t.text}`).join('\n');
         context = prefs.autoRollover
-            ? `Incomplete tasks being rolled over to tomorrow:\n${taskLines}`
-            : `Incomplete tasks from today (not rolling over — user has auto-rollover off):\n${taskLines}`;
+            ? `Incomplete tasks that will carry over to tomorrow on your first message:\n${taskLines}`
+            : `Incomplete tasks from today (auto-rollover is off, so they won't carry over):\n${taskLines}`;
     }
 
     const text = await callClaude(
