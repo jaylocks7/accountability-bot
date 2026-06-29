@@ -329,73 +329,41 @@ async function handleWebhook(event: APIGatewayProxyEvent) {
     } else if (response.stop_reason === "tool_use") {
         for (const block of response.content) {
             if (block.type === "tool_use") {
-                switch (block.name) {
-                    case "complete_tasks": {
-                        // call batchUpdateTasks with completed: true
-                        const input = block.input as { task_indices: number[] };
-                        const indices = input.task_indices;
-                        try {
-                            await batchUpdateTasks(date, { complete: indices })
-                        } catch (error) {
-                            throw new Error(`Tool Call complete_tasks failed to update tasks: ${error}`);
+                try {
+                    switch (block.name) {
+                        case "complete_tasks": {
+                            const input = block.input as { task_indices: number[] };
+                            await batchUpdateTasks(date, { complete: input.task_indices });
+                            break;
                         }
-                        break;
-                    }
-                    case "uncomplete_tasks": {
-                        // call batchUpdateTasks with completed: true
-                        const input = block.input as { tasks_indices: number[] };
-                        const indices = input.tasks_indices;
-                        try {
-                            await batchUpdateTasks(date, { uncomplete: indices })
-                        } catch (error) {
-                            throw new Error(`Tool Call uncomplete_tasks failed to update tasks: ${error}`);
+                        case "uncomplete_tasks": {
+                            const input = block.input as { tasks_indices: number[] };
+                            await batchUpdateTasks(date, { uncomplete: input.tasks_indices });
+                            break;
                         }
-                        break;
-                    }
-                    case "add_tasks": {
-                        const input = block.input as { tasks: string[] };
-                        const tasks = input.tasks
-                        try {
-                            await batchUpdateTasks(date, { add: tasks })
-                        } catch (error) {
-                            throw new Error(`Tool Call add_tasks failed to update tasks: ${error}`);
+                        case "add_tasks": {
+                            const input = block.input as { tasks: string[] };
+                            await batchUpdateTasks(date, { add: input.tasks });
+                            break;
                         }
-                        break;
-                    }
-                    case "remove_tasks": {
-                        const input = block.input as { tasks_indices: number[] };
-                        const indices = input.tasks_indices
-                        try {
-                            await batchUpdateTasks(date, { remove: indices })
-                        } catch (error) {
-                            throw new Error(`Tool Call remove_tasks failed to update tasks: ${error}`);
+                        case "remove_tasks": {
+                            const input = block.input as { tasks_indices: number[] };
+                            await batchUpdateTasks(date, { remove: input.tasks_indices });
+                            break;
                         }
-                        break;
-                    }
-                    case "set_priority": {
-                        const input = block.input as { tasks_indices: number[] };
-                        const indices = input.tasks_indices;
-                        try {
-                            await batchUpdateTasks(date, { makePriority: indices });
-                        } catch (error) {
-                            throw new Error(`Tool Call set_priority failed to update tasks: ${error}`);
+                        case "set_priority": {
+                            const input = block.input as { tasks_indices: number[] };
+                            await batchUpdateTasks(date, { makePriority: input.tasks_indices });
+                            break;
                         }
-                        break;
-                    }
-                    case "unset_priority": {
-                        const input = block.input as { tasks_indices: number[] };
-                        const indices = input.tasks_indices;
-                        try {
-                            await batchUpdateTasks(date, { unmakePriority: indices });
-                        } catch (error) {
-                            throw new Error(`Tool Call unset_priority failed to update tasks: ${error}`);
+                        case "unset_priority": {
+                            const input = block.input as { tasks_indices: number[] };
+                            await batchUpdateTasks(date, { unmakePriority: input.tasks_indices });
+                            break;
                         }
-                        break;
-                    }
-                    case "set_tasks_for_tomorrow": {
-                        const input = block.input as { tasks: string[] };
-                        const tomorrow = getDatePT(1);
-                        try {
+                        case "set_tasks_for_tomorrow": {
+                            const input = block.input as { tasks: string[] };
+                            const tomorrow = getDatePT(1);
                             const existingTomorrow = await getTasksForDate(tomorrow);
                             if (existingTomorrow) {
                                 await batchUpdateTasks(tomorrow, { add: input.tasks });
@@ -405,44 +373,44 @@ async function handleWebhook(event: APIGatewayProxyEvent) {
                                 const incomplete = prefs.autoRollover
                                     ? (todayRecord?.tasks ?? []).filter((t: any) => !t.completed).map((t: any) => ({ ...t, completed: false }))
                                     : [];
-                                const newTasks = [
+                                await saveCheckIn(tomorrow, Date.now(), 'task_list', [
                                     ...incomplete,
                                     ...input.tasks.map(text => ({ text, completed: false, priority: false }))
-                                ];
-                                await saveCheckIn(tomorrow, Date.now(), 'task_list', newTasks);
+                                ]);
                             }
                             await setEveningSession(false);
-                        } catch (error) {
-                            throw new Error(`Tool Call set_tasks_for_tomorrow failed: ${error}`);
+                            break;
                         }
-                        break;
-                    }
-                    case "set_rollover_preference": {
-                        const input = block.input as { autoRollover: boolean };
-                        try {
+                        case "set_rollover_preference": {
+                            const input = block.input as { autoRollover: boolean };
                             await setAutoRollover(input.autoRollover);
-                        } catch (error) {
-                            throw new Error(`Tool Call set_rollover_preference failed: ${error}`);
+                            break;
                         }
-                        break;
                     }
+                    let toolResultContent: string;
+                    if (block.name === "set_tasks_for_tomorrow") {
+                        const tomorrowTasks = await formatTasks(getDatePT(1));
+                        toolResultContent = `Tomorrow's task list saved:\n${tomorrowTasks}`;
+                    } else if (block.name === "set_rollover_preference") {
+                        const input = block.input as { autoRollover: boolean };
+                        toolResultContent = `Auto-rollover preference set to: ${input.autoRollover}`;
+                    } else {
+                        const updatedTasks = await formatTasks(date);
+                        toolResultContent = `Tasks updated. Current list:\n${updatedTasks}`;
+                    }
+                    toolResults.push({
+                        type: "tool_result",
+                        tool_use_id: block.id,
+                        content: toolResultContent
+                    });
+                } catch (error) {
+                    toolResults.push({
+                        type: "tool_result",
+                        tool_use_id: block.id,
+                        content: String(error),
+                        is_error: true
+                    });
                 }
-                let toolResultContent: string;
-                if (block.name === "set_tasks_for_tomorrow") {
-                    const tomorrowTasks = await formatTasks(getDatePT(1));
-                    toolResultContent = `Tomorrow's task list saved:\n${tomorrowTasks}`;
-                } else if (block.name === "set_rollover_preference") {
-                    const input = block.input as { autoRollover: boolean };
-                    toolResultContent = `Auto-rollover preference set to: ${input.autoRollover}`;
-                } else {
-                    const updatedTasks = await formatTasks(date);
-                    toolResultContent = `Tasks updated. Current list:\n${updatedTasks}`;
-                }
-                toolResults.push({
-                    type: "tool_result",
-                    tool_use_id: block.id,
-                    content: toolResultContent
-                });
 
                 
             }
