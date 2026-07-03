@@ -42,8 +42,8 @@ async function checkShouldProceed(): Promise<boolean> {
 
 async function callClaude(system: string, userContent: string): Promise<string> {
     const response = await client.messages.create({
-        model: "claude-sonnet-4-6",
-        max_tokens: 512,
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 200,
         system,
         messages: [{ role: "user", content: userContent }]
     });
