@@ -26,7 +26,8 @@
     "@aws-sdk/client-dynamodb": "^3.956.0",
     "@aws-sdk/lib-dynamodb": "^3.956.0",
     "axios": "^1.13.2",
-    "dotenv": "^17.2.3"
+    "dotenv": "^17.2.3",
+    "ulid": "^3.0.2"
   },
   "devDependencies": {
     "@types/aws-lambda": "^8.10.161",
