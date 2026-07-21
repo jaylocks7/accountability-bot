@@ -24,8 +24,8 @@ export const handler = async (event: any, _context: any) => {
     try {
         await handleWebhook(event);
     } catch (error) {
+      // Secret mismatch or body parse error — log but still return 200 to avoid Telegram retry-storms
       console.error('handleWebhook error:', error);
-      return {statusCode: 400, body: String(error)}
     }
     return { statusCode: 200, body: 'OK'}
   } else {
