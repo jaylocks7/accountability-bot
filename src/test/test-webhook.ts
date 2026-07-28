@@ -89,6 +89,9 @@ if (!process.env.TEST_CHAT_ID) {
     // Use a unique chat id per run so we get the new-user flow reliably
     const newUserId = `9${Date.now()}`.slice(0, 10);
 
+    // Setup: ensure CHAT_ID exists in Users table (first message triggers welcome + early return)
+    await handleWebhook(makeEvent("setup", CHAT_ID)).catch(() => {});
+
     // AC2: Unknown chatId → welcome message (new-user flow, returns early)
     await test("unknown chatId → welcome message and return", async () => {
         // Should not throw; the handler sends welcome and returns without Claude call
