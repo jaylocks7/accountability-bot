@@ -344,7 +344,7 @@ export async function handleWebhook(event: APIGatewayProxyEvent): Promise<void> 
             return;
         }
         user = await createUser(chatId, firstName);
-        const welcomeText = `Hey ${firstName}! I'm your accountability coach. Send me your to-do list to get started — and tell me your city or timezone so I check in at the right hours.`;
+        const welcomeText = `Hey ${firstName}! I'm your accountability coach. Send me your tasks to get started.\n\nTip: use /list to see your current list, or /help for all commands.`;
         await sendMessage(chatId, welcomeText);
         await saveMessage(chatId, { role: "assistant", kind: "chat", content: welcomeText });
         return;
@@ -365,13 +365,35 @@ export async function handleWebhook(event: APIGatewayProxyEvent): Promise<void> 
             }
         }
 
-        // Step 7: /list shortcut
+        // Step 7: /list and /help shortcuts
         if (userMessage.trim() === "/list") {
             const tasks = await getTasksForDate(chatId, date);
             const listText = formatTaskList(tasks);
             await saveMessage(chatId, { role: "user", kind: "chat", content: userMessage });
             await saveMessage(chatId, { role: "assistant", kind: "chat", content: listText });
             await sendMessage(chatId, listText);
+            return;
+        }
+
+        if (userMessage.trim() === "/help") {
+            const helpText = `Here's what I can do:
+
+/list — view today's task list
+/help — show this message
+
+Just talk to me naturally for everything else:
+• "Add gym, laundry, call mom" — adds tasks
+• "I finished gym" — marks it complete
+• "Remove task 2" — removes by number
+• "Make task 0 priority" — flags it with *
+• "I'm in Tokyo" — sets your timezone
+• "Turn on auto-rollover" — carries incomplete tasks to the next day
+• "Turn on check-ins" — enables morning/afternoon/evening nudges
+
+I go to sleep after 6 missed check-ins and wake up when you message me.`;
+            await saveMessage(chatId, { role: "user", kind: "chat", content: userMessage });
+            await saveMessage(chatId, { role: "assistant", kind: "chat", content: helpText });
+            await sendMessage(chatId, helpText);
             return;
         }
 
