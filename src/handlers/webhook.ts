@@ -338,6 +338,11 @@ export async function handleWebhook(event: APIGatewayProxyEvent): Promise<void> 
     // Step 4: Resolve user
     let user = await getUser(chatId);
     if (!user) {
+        const password = process.env.BOT_PASSWORD;
+        if (password && userMessage.trim() !== password) {
+            await sendMessage(chatId, "Enter the access code to use this bot.");
+            return;
+        }
         user = await createUser(chatId, firstName);
         const welcomeText = `Hey ${firstName}! I'm your accountability coach. Send me your to-do list to get started — and tell me your city or timezone so I check in at the right hours.`;
         await sendMessage(chatId, welcomeText);
