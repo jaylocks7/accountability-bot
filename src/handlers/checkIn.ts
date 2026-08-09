@@ -1,126 +1,153 @@
-import { getTasksForDate, getPreferences, setEveningSession, incrementMissedCheckIns } from '../services/dynamodb.js';
-import { sendMessage } from '../services/telegram.js';
-import Anthropic from '@anthropic-ai/sdk';
-import dotenv from 'dotenv';
-dotenv.config();
+import { SQSClient, SendMessageBatchCommand } from "@aws-sdk/client-sqs";
+import {
+    getAllUsers,
+    getUser,
+    claimCheckIn,
+    incrementMissedCheckIns,
+    updateUser,
+    saveMessage,
+    getTasksForDate,
+} from "../services/dynamodb.js";
+import { getLocalDate, getLocalHour } from "../services/dates.js";
+import { sendMessage } from "../services/telegram.js";
+import { formatTaskList } from "../services/format.js";
 
-const client = new Anthropic();
-const CHAT_ID = process.env.YOUR_TELEGRAM_CHAT_ID!;
+// ─── SQS client ───────────────────────────────────────────────────────────────
 
-function getDatePT(offsetDays = 0): string {
-    const date = new Date();
-    if (offsetDays) date.setDate(date.getDate() + offsetDays);
-    return new Intl.DateTimeFormat('en-CA', {
-        timeZone: 'America/Los_Angeles',
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit'
-    }).format(date);
+const REGION = process.env.AWS_REGION ?? "us-east-2";
+const CHECKIN_QUEUE_URL = process.env.CHECKIN_QUEUE_URL ?? "";
+const sqsClient = new SQSClient({ region: REGION });
+
+interface SqsEntry {
+    Id: string;
+    MessageBody: string;
 }
 
-function formatTasksForPrompt(taskRecord: any): string {
-    const tasks = taskRecord?.tasks;
-    if (!tasks?.length) return "No tasks on the list.";
-    return tasks.map((task: any, i: number) => {
-        const status = task.completed ? '[done]' : '[ ]';
-        const priority = task.priority ? ' *' : '';
-        return `${i}. ${status} ${task.text}${priority}`;
-    }).join('\n');
+async function sqsSendBatch(entries: SqsEntry[]): Promise<void> {
+    if (!CHECKIN_QUEUE_URL) throw new Error("CHECKIN_QUEUE_URL not set");
+    await sqsClient.send(new SendMessageBatchCommand({
+        QueueUrl: CHECKIN_QUEUE_URL,
+        Entries: entries,
+    }));
 }
 
-const SLEEP_MESSAGE = "Hey, I'm gonna sleep since you haven't responded — message me to start our check-ins again!";
+// ─── Dispatcher ────────────────────────────────────────────────────────────────
 
-async function checkShouldProceed(): Promise<boolean> {
-    const newCount = await incrementMissedCheckIns();
-    if (newCount > 6) return false; // already sleeping, stay quiet
-    if (newCount === 6) {
-        await sendMessage(CHAT_ID, SLEEP_MESSAGE);
-        return false;
+export async function dispatcher(): Promise<void> {
+    const users = await getAllUsers();
+    const due = users.filter((u) => u.status === "active" && u.checkInsEnabled);
+
+    const entries: SqsEntry[] = [];
+    for (const user of due) {
+        const hour = getLocalHour(user.timezone);
+        const localDate = getLocalDate(user.timezone);
+        const { morning, afternoon, evening } = user.checkInHours;
+
+        let checkInType: "morning" | "afternoon" | "evening" | null = null;
+        if (hour === morning) checkInType = "morning";
+        else if (hour === afternoon) checkInType = "afternoon";
+        else if (hour === evening) checkInType = "evening";
+
+        if (checkInType) {
+            entries.push({
+                Id: `${user.chatId}-${checkInType}`,
+                MessageBody: JSON.stringify({ chatId: user.chatId, checkInType, localDate }),
+            });
+        }
     }
-    return true;
+
+    if (entries.length === 0) return;
+
+    // SendMessageBatch accepts max 10 per call
+    for (let i = 0; i < entries.length; i += 10) {
+        await sqsSendBatch(entries.slice(i, i + 10));
+    }
+    console.log(`[dispatcher] enqueued ${entries.length} check-in(s)`);
 }
 
-async function callClaude(system: string, userContent: string): Promise<string> {
-    const response = await client.messages.create({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 200,
-        system,
-        messages: [{ role: "user", content: userContent }]
-    });
-    const textBlock = response.content.find(b => b.type === 'text');
-    if (!textBlock || textBlock.type !== 'text') throw new Error('No text in Claude response');
-    return textBlock.text;
+// ─── Worker ────────────────────────────────────────────────────────────────────
+
+interface CheckInPayload {
+    chatId: string;
+    checkInType: "morning" | "afternoon" | "evening";
+    localDate: string;
 }
 
-async function morningCheckIn() {
-    if (!await checkShouldProceed()) return;
-    const today = getDatePT();
-    let taskRecord = await getTasksForDate(today);
-    if (!taskRecord) taskRecord = await getTasksForDate(getDatePT(-1));
+const SLEEP_THRESHOLD = 6;
 
-    const taskList = formatTasksForPrompt(taskRecord);
+async function runCheckInForUser(payload: CheckInPayload): Promise<void> {
+    const { chatId, checkInType, localDate } = payload;
 
-    const text = await callClaude(
-        `You are a friendly but firm accountability coach sending a morning check-in message.
-        Reference the user's task list naturally — don't just recite it back.
-        Be energizing and brief (3-4 sentences max).`,
-        `Today's tasks:\n${taskList}`
-    );
+    // Step 1: verify user exists and has check-ins enabled
+    const user = await getUser(chatId);
+    if (!user || !user.checkInsEnabled) return;
 
-    await sendMessage(CHAT_ID, text);
-}
+    // Step 2: claim idempotency slot
+    const claimed = await claimCheckIn(chatId, checkInType, localDate);
+    if (!claimed) {
+        console.log(`[worker] skipping duplicate ${checkInType} for ${chatId} on ${localDate}`);
+        return;
+    }
 
-async function afternoonCheckIn() {
-    if (!await checkShouldProceed()) return;
-    const today = getDatePT();
-    let taskRecord = await getTasksForDate(today);
-    if (!taskRecord) taskRecord = await getTasksForDate(getDatePT(-1));
+    // Step 3: increment missed check-ins
+    const missed = await incrementMissedCheckIns(chatId);
+    if (missed === SLEEP_THRESHOLD) {
+        const sleepMsg =
+            "I haven't heard from you in a while — I'll stop checking in for now. Message me anytime to wake me up!";
+        await updateUser(chatId, { status: "sleeping" });
+        await sendMessage(chatId, sleepMsg);
+        await saveMessage(chatId, { role: "assistant", kind: "check_in", checkInType, content: sleepMsg });
+        return;
+    }
+    if (missed > SLEEP_THRESHOLD) return;
 
-    const taskList = formatTasksForPrompt(taskRecord);
+    // Step 4: generate check-in message
+    const tasks = await getTasksForDate(chatId, localDate);
+    const taskList = formatTaskList(tasks);
 
-    const text = await callClaude(
-        `You are a friendly but firm accountability coach sending an afternoon check-in.
-        Celebrate completed tasks, gently push on remaining ones.
-        Be encouraging and brief (3-4 sentences max).`,
-        `Task list:\n${taskList}`
-    );
-
-    await sendMessage(CHAT_ID, text);
-}
-
-async function eveningPrompt() {
-    if (!await checkShouldProceed()) return;
-    const today = getDatePT();
-
-    const [taskRecord, prefs] = await Promise.all([
-        getTasksForDate(today),
-        getPreferences()
-    ]);
-
-    const incomplete = taskRecord?.tasks?.filter((t: any) => !t.completed) ?? [];
-
-    await setEveningSession(true);
-
-    let context: string;
-    if (incomplete.length === 0) {
-        context = "All tasks completed today — nothing to roll over.";
+    let text: string;
+    if (checkInType === "morning") {
+        text =
+            `Good morning! Here's your list for today (${localDate}):\n\n${taskList}\n\nWhat are you tackling first?`;
+    } else if (checkInType === "afternoon") {
+        text =
+            `Afternoon check-in! Here's where things stand:\n\n${taskList}\n\nHow's the day going? Any updates?`;
     } else {
-        const taskLines = incomplete.map((t: any) => `- ${t.text}`).join('\n');
-        context = prefs.autoRollover
-            ? `Incomplete tasks that will carry over to tomorrow on your first message:\n${taskLines}`
-            : `Incomplete tasks from today (auto-rollover is off, so they won't carry over):\n${taskLines}`;
+        // evening — also sets eveningSession
+        await updateUser(chatId, { eveningSession: true });
+        const rolloverNote = user.autoRollover
+            ? " Incomplete tasks will automatically carry over to tomorrow."
+            : " Let me know if you'd like to roll anything over to tomorrow.";
+        text =
+            `Evening wrap-up! Here's your list:\n\n${taskList}\n\nHow'd you do today?${rolloverNote}`;
     }
 
-    const text = await callClaude(
-        `You are a friendly but firm accountability coach sending an evening message.
-        Briefly acknowledge today's results (celebrate if all done, acknowledge incomplete ones without shame).
-        Mention whether incomplete tasks are carrying over to tomorrow or not.
-        Ask the user to share any additional tasks they want on tomorrow's list.
-        Keep it warm and brief (3-4 sentences max).`,
-        context
-    );
-
-    await sendMessage(CHAT_ID, text);
+    // Step 5: send and save
+    await sendMessage(chatId, text);
+    await saveMessage(chatId, { role: "assistant", kind: "check_in", checkInType, content: text });
 }
 
-export { morningCheckIn, afternoonCheckIn, eveningPrompt };
+// ─── SQS batch worker handler ─────────────────────────────────────────────────
+
+interface SqsRecord {
+    messageId: string;
+    body: string;
+}
+
+export async function workerHandler(
+    records: SqsRecord[]
+): Promise<{ batchItemFailures: { itemIdentifier: string }[] }> {
+    const failures: { itemIdentifier: string }[] = [];
+
+    for (const record of records) {
+        try {
+            const payload = JSON.parse(record.body) as CheckInPayload;
+            await runCheckInForUser(payload);
+        } catch (err) {
+            console.error(`[worker] failed for messageId ${record.messageId}:`, err);
+            failures.push({ itemIdentifier: record.messageId });
+        }
+    }
+
+    return { batchItemFailures: failures };
+}

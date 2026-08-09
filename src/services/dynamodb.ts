@@ -1,411 +1,414 @@
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { PutCommand, QueryCommand, UpdateCommand, DeleteCommand, GetCommand, DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
+import {
+    PutCommand,
+    QueryCommand,
+    UpdateCommand,
+    GetCommand,
+    DeleteCommand,
+    BatchWriteCommand,
+    ScanCommand,
+    DynamoDBDocumentClient,
+} from "@aws-sdk/lib-dynamodb";
+import { ConditionalCheckFailedException } from "@aws-sdk/client-dynamodb";
+import { ulid } from "ulid";
 
-const client = new DynamoDBClient({region: "us-east-2"});
+const client = new DynamoDBClient({ region: "us-east-2" });
 const docClient = DynamoDBDocumentClient.from(client);
 
-// Rate limiting tracking (in-memory, resets on Lambda cold start)
+const USERS_TABLE = process.env.USERS_TABLE ?? "Users";
+const TASKS_TABLE = process.env.TASKS_TABLE ?? "Tasks";
+const MESSAGES_TABLE = process.env.MESSAGES_TABLE ?? "Messages";
+
+// ─── Interfaces ──────────────────────────────────────────────────────────────
+
+export interface User {
+    chatId: string;
+    firstName: string;
+    timezone: string;
+    checkInHours: { morning: number; afternoon: number; evening: number };
+    checkInsEnabled: boolean;
+    autoRollover: boolean;
+    missedCheckIns: number;
+    eveningSession: boolean;
+    status: "active" | "sleeping";
+    lastCheckIns: { morning?: string; afternoon?: string; evening?: string };
+    createdAt: number;
+    lastResponseAt: number;
+}
+
+export interface Task {
+    chatId: string;
+    sk: string;
+    taskId: string;
+    date: string;
+    text: string;
+    completed: boolean;
+    priority: boolean;
+    createdAt: number;
+    completedAt?: number;
+    rolledOverFrom?: string;
+}
+
+export interface StoredMessage {
+    chatId: string;
+    sk: string;
+    role: "user" | "assistant";
+    kind: "chat" | "check_in" | "error";
+    checkInType?: "morning" | "afternoon" | "evening";
+    content: string;
+    createdAt: number;
+    expiresAt: number;
+}
+
+// ─── Rate limiting (in-memory, keyed by chatId) ───────────────────────────────
+
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
-const RATE_LIMIT_MAX = 100; // max operations per minute per date
-const RATE_LIMIT_WINDOW = 60000; // 1 minute in ms
+const RATE_LIMIT_MAX = 100;
+const RATE_LIMIT_WINDOW = 60000;
 
-// Helper function to sanitize text
-function sanitizeText(text: string) {
-  // Allow: alphanumeric, apostrophe, !, @, $, +, space
-  return text.replace(/[^a-zA-Z0-9'\s!@$+]/g, '').trim();
-}
-
-// Helper function to check rate limit
-function checkRateLimit(date: string) {
-  const now = Date.now();
-  const limitData = rateLimitMap.get(date);
-
-  if (!limitData || now > limitData.resetTime) {
-    // Reset or initialize
-    rateLimitMap.set(date, { count: 1, resetTime: now + RATE_LIMIT_WINDOW });
-    return;
-  }
-
-  if (limitData.count >= RATE_LIMIT_MAX) {
-    throw new Error(`Rate limit exceeded for ${date}. Max ${RATE_LIMIT_MAX} operations per minute.`);
-  }
-
-  limitData.count++;
-}
-
-// Helper function to reset rate limit (for testing purposes)
-function resetRateLimit(date?: string) {
-  if (date) {
-    rateLimitMap.delete(date);
-  } else {
-    rateLimitMap.clear();
-  }
-}
-
-interface Task {
-  text: string;
-  completed: boolean;
-  priority: boolean;
-}
-
-//WRITE
-//Case 1 -- end of day check in to get task list for next day
-//Case 2 -- save a user msg to agent (ie i finished laundry!)
-//Case 3 -- save an agent response to user
-async function saveCheckIn(date: string, timestamp: number, type: string, tasks: Task[] = [], message = "") {
-    //tasks: [
-    // {text: "workout", completed: false, priority: true},
-    //]
-
-    // Validate date format (YYYY-MM-DD)
-    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-    if (!dateRegex.test(date)) {
-        throw new Error('Invalid date format: must be YYYY-MM-DD');
+export function checkRateLimit(chatId: string): void {
+    const now = Date.now();
+    const limitData = rateLimitMap.get(chatId);
+    if (!limitData || now > limitData.resetTime) {
+        rateLimitMap.set(chatId, { count: 1, resetTime: now + RATE_LIMIT_WINDOW });
+        return;
     }
-
-    // Validate date components
-    const [year, month, day] = date.split('-').map(Number);
-    if (year < 2000) {
-        throw new Error('Invalid year: must be 2000 or later');
+    if (limitData.count >= RATE_LIMIT_MAX) {
+        throw new Error(`Rate limit exceeded for ${chatId}. Max ${RATE_LIMIT_MAX} operations per minute.`);
     }
-    if (month < 1 || month > 12) {
-        throw new Error('Invalid month: must be between 01 and 12');
-    }
-    if (day < 1 || day > 31) {
-        throw new Error('Invalid day: must be between 01 and 31');
-    }
-
-    if (isNaN(timestamp)|| timestamp <= 0) {
-        throw new Error('Invalid timestamp: must be a positive number');
-    }
-
-    const validTypes = ['task_list', 'ai_output', 'user_input'];
-    if (!validTypes.includes(type)) {
-        throw new Error(`Invalid type: must be one of ${validTypes.join(', ')}`);
-    }
-
-    // Rate limiting
-    checkRateLimit(date);
-
-    // Validate and sanitize tasks array
-    if (tasks.length > 30) {
-        throw new Error('Too many tasks: maximum 30 tasks per list');
-    }
-
-    if (tasks.length > 0) {
-        tasks = tasks.map((task, index) => {
-
-            // Sanitize and validate length
-            const sanitizedText = sanitizeText(task.text);
-            if (sanitizedText.length === 0) {
-                throw new Error(`Task ${index} text is empty after sanitization`);
-            }
-            if (sanitizedText.length > 500) {
-                throw new Error(`Task ${index} text too long: maximum 500 characters`);
-            }
-
-            return {
-                text: sanitizedText,
-                completed: task.completed,
-                priority: task.priority
-            };
-        });
-    }
-
-    // Validate and sanitize message
-    if (message) {
-        message = sanitizeText(message);
-        if (message.length > 1000) {
-            throw new Error('Message too long: maximum 1000 characters');
-        }
-    }
-
-    const item: { date: string; timestamp: number; type: string; tasks?: Task[]; message?: string } = {
-      date,
-      timestamp,
-      type,
-      ...(tasks.length > 0 || type === 'task_list' ? { tasks } : {}),
-      ...(message && { message }),
-  };
-
-    const command = new PutCommand({
-        TableName: "CheckIns",
-        Item: item
-    });
-
-    const response = await docClient.send(command);
-    console.log(response);
-    return response;
+    limitData.count++;
 }
 
-//READ
-async function getRecordsForDate(date: string) {
-  const command = new QueryCommand({
-    TableName: "CheckIns",
-    KeyConditionExpression: "#date = :dateValue",
-    ExpressionAttributeNames: {
-      "#date": "date"
-    },
-    ExpressionAttributeValues: {
-      ":dateValue": date
+export function resetRateLimit(chatId?: string): void {
+    if (chatId) {
+        rateLimitMap.delete(chatId);
+    } else {
+        rateLimitMap.clear();
     }
-  });
-
-  const response = await docClient.send(command);
-  return response.Items;
 }
 
-//SPECIFIC READ
-async function getTasksForDate(date: string) {
-  const records = await getRecordsForDate(date);
-  return records?.find(r => r.type === "task_list");
+// ─── Sanitization ─────────────────────────────────────────────────────────────
+
+export function sanitizeText(text: string): string {
+    return text.replace(/[^a-zA-Z0-9'\s!@$+]/g, "").trim();
 }
 
-interface TaskUpdates {
-  complete?: number[];
-  uncomplete?: number[];
-  makePriority?: number[];
-  unmakePriority?: number[];
-  remove?: number[];
-  add?: string[];
-  updateText?: { index: number; text: string }[];
+// ─── Users ────────────────────────────────────────────────────────────────────
+
+export async function getUser(chatId: string): Promise<User | null> {
+    const response = await docClient.send(
+        new GetCommand({ TableName: USERS_TABLE, Key: { chatId } })
+    );
+    return (response.Item as User) ?? null;
 }
 
-//BATCH UPDATE
-async function batchUpdateTasks(date: string, updates: TaskUpdates) {
-  // updates = {
-  //   complete: [0, 2],           // task indices to mark complete
-  //   uncomplete: [1],            // task indices to mark incomplete
-  //   add: ["call mom"],          // new tasks to add (as strings)
-  //   remove: [5],                // task indices to remove
-  //   updateText: [{index: 0, text: "workout at gym"}],  // update task message
-  //   makePriority: [1, 3],       // task indices to mark as priority
-  //   unmakePriority: [2]         // task indices to unmark as priority
-  // }
-
-  // Rate limiting
-  checkRateLimit(date);
-
-
-  // Validate and sanitize add array (array of strings)
-  if (updates.add !== undefined) {
-    updates.add = updates.add.map((text, i) => {
-      const sanitized = sanitizeText(text);
-      if (sanitized.length === 0) {
-        throw new Error(`add[${i}] is empty after sanitization`);
-      }
-      if (sanitized.length > 500) {
-        throw new Error(`add[${i}] too long: maximum 500 characters`);
-      }
-      return sanitized;
-    });
-  }
-
-  // Validate and sanitize updateText array
-  if (updates.updateText !== undefined) {
-    updates.updateText = updates.updateText.map((update, i) => {
-      if (!Number.isInteger(update.index) || update.index < 0) {
-        throw new Error(`updateText[${i}] has invalid index (must be non-negative integer)`);
-      }
-      if (!update.text) {
-        throw new Error(`updateText[${i}] missing or invalid text field`);
-      }
-      const sanitized = sanitizeText(update.text);
-      if (sanitized.length === 0) {
-        throw new Error(`updateText[${i}] text is empty after sanitization`);
-      }
-      if (sanitized.length > 500) {
-        throw new Error(`updateText[${i}] text too long: maximum 500 characters`);
-      }
-      return {
-        index: update.index,
-        text: sanitized
-      };
-    });
-  }
-
-  // Step 1: Get current task list
-  const taskRecord = await getTasksForDate(date);
-  if (!taskRecord) {
-    throw new Error(`No task list found for ${date}`);
-  }
-
-  let tasks = [...(taskRecord.tasks ?? [])];
-
-  // Step 2: Apply all updates
-
-  // Mark tasks as complete
-  if (updates.complete?.length) {
-    updates.complete.forEach(index => {
-      if (tasks[index]) {
-        tasks[index].completed = true;
-      }
-    });
-  }
-
-  // Mark tasks as incomplete
-  if (updates.uncomplete?.length) {
-    updates.uncomplete.forEach(index => {
-      if (tasks[index]) {
-        tasks[index].completed = false;
-      }
-    });
-  }
-
-  // Update task text/message
-  if (updates.updateText?.length) {
-    updates.updateText.forEach(update => {
-      if (tasks[update.index]) {
-        tasks[update.index].text = update.text;
-      }
-    });
-  }
-
-  // Mark as priority
-  if (updates.makePriority?.length) {
-    updates.makePriority.forEach(index => {
-      if (tasks[index]) {
-        tasks[index].priority = true;
-      }
-    });
-  }
-
-  // Unmark as priority
-  if (updates.unmakePriority?.length) {
-    updates.unmakePriority.forEach(index => {
-      if (tasks[index]) {
-        tasks[index].priority = false;
-      }
-    });
-  }
-
-  // Remove tasks (do this AFTER other modifications, before adding)
-  if (updates.remove?.length) {
-    // Sort in descending order to remove from end first (prevents index shifting)
-    const sortedIndices = [...updates.remove].sort((a, b) => b - a);
-    sortedIndices.forEach(index => {
-      if (index >= 0 && index < tasks.length) {
-        tasks.splice(index, 1);
-      }
-    });
-  }
-
-  // Add new tasks (already sanitized above)
-  if (updates.add?.length) {
-    updates.add.forEach(taskText => {
-      tasks.push({
-        text: taskText,
-        completed: false,
-        priority: false  // new tasks default to non-priority
-      });
-    });
-  }
-
-  // Validate final task count
-  if (tasks.length > 30) {
-    throw new Error('Too many tasks after update: maximum 30 tasks per list');
-  }
-
-  // Step 3: Update the existing record (keeps original timestamp)
-  const command = new UpdateCommand({
-    TableName: "CheckIns",
-    Key: {
-      date: date,
-      timestamp: taskRecord.timestamp  // Original timestamp preserved
-    },
-    UpdateExpression: "SET tasks = :tasks",
-    ExpressionAttributeValues: {
-      ":tasks": tasks
-    }
-  });
-
-  await docClient.send(command);
-  return tasks;
-}
-
-//DELETE - for cleanup/testing purposes
-async function deleteRecordsForDate(date: string) {
-  // Get all records for the date
-  const records = await getRecordsForDate(date) ?? [];
-
-  // Delete each record
-  for (const record of records) {
-    const command = new DeleteCommand({
-      TableName: "CheckIns",
-      Key: {
-        date: record.date,
-        timestamp: record.timestamp
-      }
-    });
-    await docClient.send(command);
-  }
-
-  return records.length;
-}
-
-// EVENING SESSION — stored at fixed key { date: "session", timestamp: 0 }
-async function getEveningSession(): Promise<boolean> {
-    const command = new GetCommand({
-        TableName: "CheckIns",
-        Key: { date: "session", timestamp: 0 }
-    });
-    const response = await docClient.send(command);
-    return response.Item?.active === true;
-}
-
-async function setEveningSession(active: boolean): Promise<void> {
-    const command = new PutCommand({
-        TableName: "CheckIns",
-        Item: { date: "session", timestamp: 0, type: "evening_session", active }
-    });
-    await docClient.send(command);
-}
-
-// PREFERENCES — stored at fixed key { date: "settings", timestamp: 0 }
-async function getPreferences(): Promise<{ autoRollover: boolean; missedCheckIns: number }> {
-    const command = new GetCommand({
-        TableName: "CheckIns",
-        Key: { date: "settings", timestamp: 0 }
-    });
-    const response = await docClient.send(command);
-    return {
-        autoRollover: response.Item?.autoRollover ?? true,
-        missedCheckIns: response.Item?.missedCheckIns ?? 0
+export async function createUser(chatId: string, firstName: string): Promise<User> {
+    const now = Date.now();
+    const user: User = {
+        chatId,
+        firstName,
+        timezone: "America/Los_Angeles",
+        checkInHours: { morning: 9, afternoon: 18, evening: 23 },
+        checkInsEnabled: false,
+        autoRollover: false,
+        missedCheckIns: 0,
+        eveningSession: false,
+        status: "active",
+        lastCheckIns: {},
+        createdAt: now,
+        lastResponseAt: now,
     };
+    await docClient.send(new PutCommand({ TableName: USERS_TABLE, Item: user }));
+    return user;
 }
 
-async function setAutoRollover(value: boolean): Promise<void> {
-    const command = new UpdateCommand({
-        TableName: "CheckIns",
-        Key: { date: "settings", timestamp: 0 },
-        UpdateExpression: "SET autoRollover = :val",
-        ExpressionAttributeValues: { ":val": value }
-    });
-    await docClient.send(command);
+export async function updateUser(
+    chatId: string,
+    patch: Partial<Omit<User, "chatId">>
+): Promise<void> {
+    if (Object.keys(patch).length === 0) return;
+
+    const sets: string[] = [];
+    const names: Record<string, string> = {};
+    const values: Record<string, unknown> = {};
+
+    for (const [k, v] of Object.entries(patch)) {
+        sets.push(`#${k} = :${k}`);
+        names[`#${k}`] = k;
+        values[`:${k}`] = v;
+    }
+
+    await docClient.send(
+        new UpdateCommand({
+            TableName: USERS_TABLE,
+            Key: { chatId },
+            UpdateExpression: `SET ${sets.join(", ")}`,
+            ExpressionAttributeNames: names,
+            ExpressionAttributeValues: values,
+        })
+    );
 }
 
-async function resetMissedCheckIns(): Promise<void> {
-    const command = new UpdateCommand({
-        TableName: "CheckIns",
-        Key: { date: "settings", timestamp: 0 },
-        UpdateExpression: "SET missedCheckIns = :zero, lastResponse = :now",
-        ExpressionAttributeValues: { ":zero": 0, ":now": Date.now() }
-    });
-    await docClient.send(command);
+export async function getAllUsers(): Promise<User[]> {
+    // ponytail: Scan is fine — table stays small (one row per human user)
+    const response = await docClient.send(new ScanCommand({ TableName: USERS_TABLE }));
+    return (response.Items ?? []) as User[];
 }
 
-async function incrementMissedCheckIns(): Promise<number> {
-    const command = new UpdateCommand({
-        TableName: "CheckIns",
-        Key: { date: "settings", timestamp: 0 },
-        UpdateExpression: "SET missedCheckIns = if_not_exists(missedCheckIns, :zero) + :one",
-        ExpressionAttributeValues: { ":zero": 0, ":one": 1 },
-        ReturnValues: "UPDATED_NEW"
-    });
-    const response = await docClient.send(command);
+export async function incrementMissedCheckIns(chatId: string): Promise<number> {
+    const response = await docClient.send(
+        new UpdateCommand({
+            TableName: USERS_TABLE,
+            Key: { chatId },
+            UpdateExpression: "SET missedCheckIns = if_not_exists(missedCheckIns, :zero) + :one",
+            ExpressionAttributeValues: { ":zero": 0, ":one": 1 },
+            ReturnValues: "UPDATED_NEW",
+        })
+    );
     return response.Attributes?.missedCheckIns as number;
 }
 
-// Export functions
-export { saveCheckIn, getRecordsForDate, getTasksForDate, batchUpdateTasks, deleteRecordsForDate, resetRateLimit, getEveningSession, setEveningSession, getPreferences, setAutoRollover, resetMissedCheckIns, incrementMissedCheckIns };
+export async function resetMissedCheckIns(chatId: string): Promise<void> {
+    await docClient.send(
+        new UpdateCommand({
+            TableName: USERS_TABLE,
+            Key: { chatId },
+            UpdateExpression: "SET missedCheckIns = :zero, #status = :active, lastResponseAt = :now",
+            ExpressionAttributeNames: { "#status": "status" },
+            ExpressionAttributeValues: {
+                ":zero": 0,
+                ":active": "active",
+                ":now": Date.now(),
+            },
+        })
+    );
+}
 
+export async function claimCheckIn(
+    chatId: string,
+    type: "morning" | "afternoon" | "evening",
+    localDate: string
+): Promise<boolean> {
+    try {
+        await docClient.send(
+            new UpdateCommand({
+                TableName: USERS_TABLE,
+                Key: { chatId },
+                UpdateExpression: "SET lastCheckIns.#t = :date",
+                ConditionExpression:
+                    "attribute_not_exists(lastCheckIns.#t) OR lastCheckIns.#t <> :date",
+                ExpressionAttributeNames: { "#t": type },
+                ExpressionAttributeValues: { ":date": localDate },
+            })
+        );
+        return true;
+    } catch (err) {
+        if (err instanceof ConditionalCheckFailedException) return false;
+        throw err;
+    }
+}
+
+// ─── Tasks ────────────────────────────────────────────────────────────────────
+
+export async function getTasksForDate(chatId: string, date: string): Promise<Task[]> {
+    const response = await docClient.send(
+        new QueryCommand({
+            TableName: TASKS_TABLE,
+            KeyConditionExpression: "chatId = :c AND begins_with(sk, :prefix)",
+            ExpressionAttributeValues: { ":c": chatId, ":prefix": `${date}#` },
+        })
+    );
+    return (response.Items ?? []) as Task[];
+}
+
+export async function addTasks(
+    chatId: string,
+    date: string,
+    texts: string[]
+): Promise<Task[]> {
+    const existing = await getTasksForDate(chatId, date);
+    const available = 30 - existing.length;
+    const toAdd = texts.slice(0, available);
+
+    if (toAdd.length === 0) return [];
+
+    const now = Date.now();
+    const newTasks: Task[] = toAdd.map((raw) => {
+        const text = sanitizeText(raw).slice(0, 500);
+        const taskId = ulid();
+        return {
+            chatId,
+            sk: `${date}#${taskId}`,
+            taskId,
+            date,
+            text,
+            completed: false,
+            priority: false,
+            createdAt: now,
+        };
+    });
+
+    // BatchWrite in chunks of 25
+    for (let i = 0; i < newTasks.length; i += 25) {
+        const chunk = newTasks.slice(i, i + 25);
+        await docClient.send(
+            new BatchWriteCommand({
+                RequestItems: {
+                    [TASKS_TABLE]: chunk.map((t) => ({ PutRequest: { Item: t } })),
+                },
+            })
+        );
+    }
+
+    return newTasks;
+}
+
+export async function mutateTasks(
+    chatId: string,
+    taskIds: string[],
+    date: string,
+    patch: { completed?: boolean; priority?: boolean }
+): Promise<void> {
+    if (taskIds.length === 0 || Object.keys(patch).length === 0) return;
+
+    const sets: string[] = [];
+    const names: Record<string, string> = {};
+    const values: Record<string, unknown> = {};
+
+    if (patch.completed !== undefined) {
+        sets.push("#completed = :completed");
+        names["#completed"] = "completed";
+        values[":completed"] = patch.completed;
+        if (patch.completed) {
+            sets.push("completedAt = :ts");
+            values[":ts"] = Date.now();
+        } else {
+            // remove completedAt when uncompleting — use REMOVE expression
+        }
+    }
+    if (patch.priority !== undefined) {
+        sets.push("#priority = :priority");
+        names["#priority"] = "priority";
+        values[":priority"] = patch.priority;
+    }
+
+    const removeCompletedAt = patch.completed === false;
+
+    for (const taskId of taskIds) {
+        const sk = `${date}#${taskId}`;
+        let updateExpr = `SET ${sets.join(", ")}`;
+        if (removeCompletedAt) updateExpr += " REMOVE completedAt";
+        await docClient.send(
+            new UpdateCommand({
+                TableName: TASKS_TABLE,
+                Key: { chatId, sk },
+                UpdateExpression: updateExpr,
+                ExpressionAttributeNames: Object.keys(names).length ? names : undefined,
+                ExpressionAttributeValues: Object.keys(values).length ? values : undefined,
+            })
+        );
+    }
+}
+
+export async function removeTasks(
+    chatId: string,
+    taskIds: string[],
+    date: string
+): Promise<void> {
+    if (taskIds.length === 0) return;
+
+    for (const taskId of taskIds) {
+        await docClient.send(
+            new DeleteCommand({
+                TableName: TASKS_TABLE,
+                Key: { chatId, sk: `${date}#${taskId}` },
+            })
+        );
+    }
+}
+
+export async function rolloverTasks(
+    chatId: string,
+    fromDate: string,
+    toDate: string
+): Promise<number> {
+    const source = await getTasksForDate(chatId, fromDate);
+    const incomplete = source.filter((t) => !t.completed);
+    if (incomplete.length === 0) return 0;
+
+    const dest = await getTasksForDate(chatId, toDate);
+    const available = 30 - dest.length;
+    const toRoll = incomplete.slice(0, available);
+    if (toRoll.length === 0) return 0;
+
+    const now = Date.now();
+    const newTasks: Task[] = toRoll.map((t) => {
+        const taskId = ulid();
+        return {
+            chatId,
+            sk: `${toDate}#${taskId}`,
+            taskId,
+            date: toDate,
+            text: t.text,
+            completed: false,
+            priority: t.priority,
+            createdAt: now,
+            rolledOverFrom: fromDate,
+        };
+    });
+
+    for (let i = 0; i < newTasks.length; i += 25) {
+        const chunk = newTasks.slice(i, i + 25);
+        await docClient.send(
+            new BatchWriteCommand({
+                RequestItems: {
+                    [TASKS_TABLE]: chunk.map((t) => ({ PutRequest: { Item: t } })),
+                },
+            })
+        );
+    }
+
+    return newTasks.length;
+}
+
+// ─── Messages ─────────────────────────────────────────────────────────────────
+
+export async function saveMessage(
+    chatId: string,
+    msg: {
+        role: "user" | "assistant";
+        kind: "chat" | "check_in" | "error";
+        content: string;
+        checkInType?: string;
+    }
+): Promise<void> {
+    const now = Date.now();
+    const sk = `${String(now).padStart(13, "0")}#${ulid()}`;
+    const item: StoredMessage = {
+        chatId,
+        sk,
+        role: msg.role,
+        kind: msg.kind,
+        content: msg.content,
+        createdAt: now,
+        expiresAt: Math.floor(now / 1000) + 30 * 24 * 3600,
+        ...(msg.checkInType
+            ? { checkInType: msg.checkInType as "morning" | "afternoon" | "evening" }
+            : {}),
+    };
+    await docClient.send(new PutCommand({ TableName: MESSAGES_TABLE, Item: item }));
+}
+
+export async function getRecentMessages(chatId: string, limit = 12): Promise<StoredMessage[]> {
+    const response = await docClient.send(
+        new QueryCommand({
+            TableName: MESSAGES_TABLE,
+            KeyConditionExpression: "chatId = :c",
+            ExpressionAttributeValues: { ":c": chatId },
+            ScanIndexForward: false,
+            Limit: limit,
+        })
+    );
+    const items = ((response.Items ?? []) as StoredMessage[]).reverse();
+    return items;
+}

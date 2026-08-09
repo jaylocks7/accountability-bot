@@ -3,6 +3,7 @@ private.txt
 node_modules/
 .env
 dist/
+dist-test/
 *.tsbuildinfo
 .mault
 .memory-layer/*
