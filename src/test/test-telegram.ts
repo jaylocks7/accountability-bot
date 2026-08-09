@@ -9,7 +9,7 @@ async function testTelegram() {
   console.log("🧪 Starting Telegram tests...\n");
 
   // Your chat ID from .env
-  const chatId = process.env.YOUR_TELEGRAM_CHAT_ID!;
+  const chatId = process.env.TELEGRAM_TEST_CHAT_ID!;
 
   try {
     // Test 1: Send a simple message

@@ -16,21 +16,10 @@ import {
 } from "../services/dynamodb.js";
 import { getLocalDate, mostRecentTaskDate } from "../services/dates.js";
 import { sendMessage } from "../services/telegram.js";
-import type { Task } from "../services/dynamodb.js";
+import { formatTaskList } from "../services/format.js";
 
 const anthropic = new Anthropic();
 const MAX_ROUNDS = 5;
-
-// ─── Formatter ────────────────────────────────────────────────────────────────
-
-function formatTask(index: number, task: Task): string {
-    return `${index}. ${task.completed ? "[done]" : "[ ]"} ${task.text}${task.priority ? " *" : ""}`;
-}
-
-function formatTaskList(tasks: Task[]): string {
-    if (tasks.length === 0) return "(no tasks)";
-    return tasks.map((t, i) => formatTask(i, t)).join("\n");
-}
 
 // ─── Tools ────────────────────────────────────────────────────────────────────
 

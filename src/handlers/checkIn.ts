@@ -10,17 +10,7 @@ import {
 } from "../services/dynamodb.js";
 import { getLocalDate, getLocalHour } from "../services/dates.js";
 import { sendMessage } from "../services/telegram.js";
-
-// ─── Formatter (shared, verbatim from §3) ─────────────────────────────────────
-
-function formatTask(index: number, task: { completed: boolean; text: string; priority: boolean }): string {
-    return `${index}. ${task.completed ? "[done]" : "[ ]"} ${task.text}${task.priority ? " *" : ""}`;
-}
-
-function formatTaskList(tasks: { completed: boolean; text: string; priority: boolean }[]): string {
-    if (tasks.length === 0) return "(no tasks)";
-    return tasks.map((t, i) => formatTask(i, t)).join("\n");
-}
+import { formatTaskList } from "../services/format.js";
 
 // ─── SQS client ───────────────────────────────────────────────────────────────
 
