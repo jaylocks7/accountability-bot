@@ -227,7 +227,7 @@ export async function addTasks(
     texts: string[]
 ): Promise<Task[]> {
     const existing = await getTasksForDate(chatId, date);
-    const available = 30 - existing.length;
+    const available = 40 - existing.length;
     const toAdd = texts.slice(0, available);
 
     if (toAdd.length === 0) return [];
@@ -337,7 +337,7 @@ export async function rolloverTasks(
     if (incomplete.length === 0) return 0;
 
     const dest = await getTasksForDate(chatId, toDate);
-    const available = 30 - dest.length;
+    const available = 40 - dest.length;
     const toRoll = incomplete.slice(0, available);
     if (toRoll.length === 0) return 0;
 
