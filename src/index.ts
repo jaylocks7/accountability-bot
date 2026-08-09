@@ -1,34 +1,27 @@
-import { morningCheckIn, afternoonCheckIn, eveningPrompt } from "./handlers/checkIn.js";
+import { dispatcher, workerHandler } from "./handlers/checkIn.js";
 import { handleWebhook } from "./handlers/webhook.js";
 
-
 export const handler = async (event: any, _context: any) => {
-  // AWS passes 'event' to you (you don't create it)
-  // Inspect the event object to determine source
-  // Return a response
-  if (Object.hasOwn(event, "checkInType")) {
-    if (event.checkInType === "morning") {
-      await morningCheckIn();
-      return { statusCode: 200}
-    } else if (event.checkInType === "afternoon") {
-      await afternoonCheckIn();      
-      return { statusCode: 200}
-    } else if (event.checkInType === "evening") {
-      await eveningPrompt();
-      return { statusCode: 200}
-    } else {
-      return { statusCode: 400, body: 'checkIn Handler failed'}
+    // SQS worker: process check-in records
+    if (event.Records?.[0]?.eventSource === "aws:sqs") {
+        return workerHandler(event.Records);
     }
 
-  } else if (Object.hasOwn(event, "requestContext")) {
-    try {
-        await handleWebhook(event);
-    } catch (error) {
-      // Secret mismatch or body parse error — log but still return 200 to avoid Telegram retry-storms
-      console.error('handleWebhook error:', error);
+    // EventBridge hourly tick: dispatch check-ins
+    if (event.checkInType === "tick") {
+        await dispatcher();
+        return { statusCode: 200 };
     }
-    return { statusCode: 200, body: 'OK'}
-  } else {
-    return { statusCode: 400, body: 'Unknown event type' }
-  }
-}
+
+    // Telegram webhook via API Gateway HTTP API
+    if (event.requestContext) {
+        try {
+            await handleWebhook(event);
+        } catch (error) {
+            console.error("handleWebhook error:", error);
+        }
+        return { statusCode: 200, body: "OK" };
+    }
+
+    return { statusCode: 400, body: "Unknown event type" };
+};
