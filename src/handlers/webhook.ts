@@ -466,6 +466,8 @@ export async function handleWebhook(event: APIGatewayProxyEvent): Promise<void> 
 
 Active tasks are your focus for today (max 10).
 Backup tasks are things to do eventually (max 40).
+If you add more active tasks than the cap allows, the overflow automatically becomes backup tasks.
+Tasks are numbered starting from 1.
 
 Just talk to me naturally for everything else:
 • "Add gym, laundry, call mom" — adds as active tasks
