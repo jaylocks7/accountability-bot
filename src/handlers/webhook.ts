@@ -454,6 +454,10 @@ export async function handleWebhook(event: APIGatewayProxyEvent): Promise<void> 
         }
 
         if (cmd === "/help") {
+            const fmtHour = (h: number) => h === 0 ? "12am" : h === 12 ? "12pm" : h < 12 ? `${h}am` : `${h - 12}pm`;
+            const checkInStatus = user.checkInsEnabled
+                ? `enabled — morning ${fmtHour(user.checkInHours.morning)}, afternoon ${fmtHour(user.checkInHours.afternoon)}, evening ${fmtHour(user.checkInHours.evening)} (${user.timezone})`
+                : "disabled";
             const helpText = `Here's what I can do:
 
 /list — view all tasks (active, backup, completed)
@@ -480,6 +484,8 @@ Just talk to me naturally for everything else:
 • "I'm in Tokyo" — sets your timezone
 • "Turn on auto-rollover" — carries incomplete tasks to the next day
 • "Turn on check-ins" — enables morning/afternoon/evening nudges
+
+Check-ins: ${checkInStatus}
 
 I go to sleep after 6 missed check-ins and wake up when you message me.`;
             await saveMessage(chatId, { role: "user", kind: "chat", content: cmd });
