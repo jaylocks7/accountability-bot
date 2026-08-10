@@ -10,7 +10,7 @@ import {
 } from "../services/dynamodb.js";
 import { getLocalDate, getLocalHour } from "../services/dates.js";
 import { sendMessage } from "../services/telegram.js";
-import { formatTaskList } from "../services/format.js";
+import { formatSections } from "../services/format.js";
 
 // ─── SQS client ───────────────────────────────────────────────────────────────
 
@@ -103,7 +103,7 @@ async function runCheckInForUser(payload: CheckInPayload): Promise<void> {
 
     // Step 4: generate check-in message
     const tasks = await getTasksForDate(chatId, localDate);
-    const taskList = formatTaskList(tasks);
+    const taskList = formatSections(tasks, "active");
 
     let text: string;
     if (checkInType === "morning") {

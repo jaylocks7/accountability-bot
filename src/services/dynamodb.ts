@@ -44,6 +44,7 @@ export interface Task {
     text: string;
     completed: boolean;
     priority: boolean;
+    active: boolean;
     createdAt: number;
     completedAt?: number;
     rolledOverFrom?: string;
@@ -224,29 +225,53 @@ export async function getTasksForDate(chatId: string, date: string): Promise<Tas
 export async function addTasks(
     chatId: string,
     date: string,
-    texts: string[]
+    texts: string[],
+    preferActive: boolean = true
 ): Promise<Task[]> {
     const existing = await getTasksForDate(chatId, date);
-    const available = 40 - existing.length;
-    const toAdd = texts.slice(0, available);
 
-    if (toAdd.length === 0) return [];
+    // Dedup: skip texts that match an existing task (case-insensitive)
+    const existingLower = existing.map((t) => t.text.toLowerCase());
+    const deduped = texts.filter((raw) => {
+        const sanitized = sanitizeText(raw).slice(0, 500);
+        return !existingLower.includes(sanitized.toLowerCase());
+    });
+
+    if (deduped.length === 0) return [];
+
+    const activeCount = existing.filter((t) => t.active && !t.completed).length;
+    const backupCount = existing.filter((t) => !t.active && !t.completed).length;
+    const activeSlots = Math.max(0, 10 - activeCount);
+    const backupSlots = Math.max(0, 40 - backupCount);
 
     const now = Date.now();
-    const newTasks: Task[] = toAdd.map((raw) => {
-        const text = sanitizeText(raw).slice(0, 500);
-        const taskId = ulid();
-        return {
-            chatId,
-            sk: `${date}#${taskId}`,
-            taskId,
-            date,
-            text,
-            completed: false,
-            priority: false,
-            createdAt: now,
-        };
-    });
+    const newTasks: Task[] = [];
+
+    if (preferActive) {
+        let aUsed = 0, bUsed = 0;
+        for (const raw of deduped) {
+            const text = sanitizeText(raw).slice(0, 500);
+            if (!text) continue;
+            let active: boolean;
+            if (aUsed < activeSlots) { active = true; aUsed++; }
+            else if (bUsed < backupSlots) { active = false; bUsed++; }
+            else break; // both caps full
+            const taskId = ulid();
+            newTasks.push({ chatId, sk: `${date}#${taskId}`, taskId, date, text, completed: false, priority: false, active, createdAt: now });
+        }
+    } else {
+        let bUsed = 0;
+        for (const raw of deduped) {
+            if (bUsed >= backupSlots) break;
+            const text = sanitizeText(raw).slice(0, 500);
+            if (!text) continue;
+            const taskId = ulid();
+            newTasks.push({ chatId, sk: `${date}#${taskId}`, taskId, date, text, completed: false, priority: false, active: false, createdAt: now });
+            bUsed++;
+        }
+    }
+
+    if (newTasks.length === 0) return [];
 
     // BatchWrite in chunks of 25
     for (let i = 0; i < newTasks.length; i += 25) {
@@ -267,7 +292,7 @@ export async function mutateTasks(
     chatId: string,
     taskIds: string[],
     date: string,
-    patch: { completed?: boolean; priority?: boolean }
+    patch: { completed?: boolean; priority?: boolean; active?: boolean }
 ): Promise<void> {
     if (taskIds.length === 0 || Object.keys(patch).length === 0) return;
 
@@ -290,6 +315,11 @@ export async function mutateTasks(
         sets.push("#priority = :priority");
         names["#priority"] = "priority";
         values[":priority"] = patch.priority;
+    }
+    if (patch.active !== undefined) {
+        sets.push("#active = :active");
+        names["#active"] = "active";
+        values[":active"] = patch.active;
     }
 
     const removeCompletedAt = patch.completed === false;
@@ -337,8 +367,16 @@ export async function rolloverTasks(
     if (incomplete.length === 0) return 0;
 
     const dest = await getTasksForDate(chatId, toDate);
-    const available = 40 - dest.length;
-    const toRoll = incomplete.slice(0, available);
+    const destActive = dest.filter((t) => t.active && !t.completed).length;
+    const destBackup = dest.filter((t) => !t.active && !t.completed).length;
+    const activeSlots = Math.max(0, 10 - destActive);
+    const backupSlots = Math.max(0, 40 - destBackup);
+
+    let aUsed = 0, bUsed = 0;
+    const toRoll = incomplete.filter((t) => {
+        if (t.active) { if (aUsed < activeSlots) { aUsed++; return true; } return false; }
+        else { if (bUsed < backupSlots) { bUsed++; return true; } return false; }
+    });
     if (toRoll.length === 0) return 0;
 
     const now = Date.now();
@@ -352,6 +390,7 @@ export async function rolloverTasks(
             text: t.text,
             completed: false,
             priority: t.priority,
+            active: t.active,
             createdAt: now,
             rolledOverFrom: fromDate,
         };

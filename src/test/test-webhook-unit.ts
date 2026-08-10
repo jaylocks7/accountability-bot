@@ -1,26 +1,16 @@
 /**
- * Unit tests for pure helpers in webhook.ts.
+ * Unit tests for pure helpers in webhook.ts / format.ts.
  * No AWS, no Telegram, no Anthropic API required.
  * Run: npx ts-node --esm src/test/test-webhook-unit.ts
  *
- * The helpers (formatTask, formatTaskList, buildMessages, extractText) are not
- * exported, so their logic is duplicated verbatim here and the tests document
+ * The helpers (formatTask, formatSections, buildMessages, extractText) are not
+ * all exported, so their logic is duplicated/imported here and the tests document
  * the expected contract. If the source diverges, tsc --noEmit won't catch it,
  * but the behaviour tests below will fail.
  */
 
 import type { Task } from "../services/dynamodb.js";
-
-// ─── Verbatim copies of the private helpers ──────────────────────────────────
-
-function formatTask(index: number, task: Task): string {
-    return `${index}. ${task.completed ? "[done]" : "[ ]"} ${task.text}${task.priority ? " *" : ""}`;
-}
-
-function formatTaskList(tasks: Task[]): string {
-    if (tasks.length === 0) return "(no tasks)";
-    return tasks.map((t, i) => formatTask(i, t)).join("\n");
-}
+import { formatTask, formatSections } from "../services/format.js";
 
 type MsgParam = { role: "user" | "assistant"; content: string };
 
@@ -53,15 +43,15 @@ function extractText(response: { content: Block[] }): string | undefined {
     return undefined;
 }
 
-// ─── Out-of-range index filtering (mirrors executeToolBlocks) ─────────────────
+// ─── Out-of-range index filtering (mirrors executeToolBlocks, now 1-based) ────
 
 function filterValidIndices(indices: number[], taskCount: number): number[] {
-    return indices.filter((i) => i >= 0 && i < taskCount);
+    return indices.filter((i) => i >= 1 && i <= taskCount);
 }
 
 // ─── Minimal task factory ─────────────────────────────────────────────────────
 
-function makeTask(text: string, completed = false, priority = false): Task {
+function makeTask(text: string, completed = false, priority = false, active = true): Task {
     return {
         chatId: "1",
         sk: `2026-01-01#${text}`,
@@ -70,6 +60,7 @@ function makeTask(text: string, completed = false, priority = false): Task {
         text,
         completed,
         priority,
+        active,
         createdAt: 0,
     };
 }
@@ -114,19 +105,30 @@ test("formatTask: completed + priority", () => {
     eq(formatTask(3, makeTask("buy milk", true, true)), "3. [done] buy milk *");
 });
 
-// ─── formatTaskList ───────────────────────────────────────────────────────────
+// ─── formatSections ───────────────────────────────────────────────────────────
 
-test("formatTaskList: empty list → (no tasks)", () => {
-    eq(formatTaskList([]), "(no tasks)");
+test("formatSections: empty list → (no tasks)", () => {
+    eq(formatSections([]), "(no tasks)");
 });
 
-test("formatTaskList: one task, index 0", () => {
-    eq(formatTaskList([makeTask("gym")]), "0. [ ] gym");
+test("formatSections: one active task, 1-based index", () => {
+    const result = formatSections([makeTask("gym")]);
+    eq(result, "Active (1/10):\n1. [ ] gym");
 });
 
-test("formatTaskList: two tasks, indices 0 and 1", () => {
-    const result = formatTaskList([makeTask("gym"), makeTask("laundry", true)]);
-    eq(result, "0. [ ] gym\n1. [done] laundry");
+test("formatSections: active + completed, 1-based indices", () => {
+    const result = formatSections([makeTask("gym"), makeTask("laundry", true)]);
+    eq(result, "Active (1/10):\n1. [ ] gym\n\nCompleted:\n2. [done] laundry");
+});
+
+test("formatSections: active filter shows only active", () => {
+    const result = formatSections([makeTask("gym"), makeTask("laundry", false, false, false)], "active");
+    eq(result, "Active (1/10):\n1. [ ] gym");
+});
+
+test("formatSections: backup filter shows only backup", () => {
+    const result = formatSections([makeTask("gym"), makeTask("laundry", false, false, false)], "backup");
+    eq(result, "Backup (1/40):\n2. [ ] laundry");
 });
 
 // ─── buildMessages alternation merging ───────────────────────────────────────
@@ -214,22 +216,22 @@ test("extractText: empty content → undefined", () => {
     eq(extractText({ content: [] }), undefined);
 });
 
-// ─── Out-of-range index filtering ─────────────────────────────────────────────
+// ─── Out-of-range index filtering (1-based) ──────────────────────────────────
 
-test("filterValidIndices: valid indices pass through", () => {
-    eq(filterValidIndices([0, 1, 2], 3), [0, 1, 2]);
+test("filterValidIndices: valid 1-based indices pass through", () => {
+    eq(filterValidIndices([1, 2, 3], 3), [1, 2, 3]);
 });
 
 test("filterValidIndices: out-of-range dropped", () => {
-    eq(filterValidIndices([0, 5, 99], 3), [0]);
+    eq(filterValidIndices([1, 5, 99], 3), [1]);
 });
 
-test("filterValidIndices: negative indices dropped", () => {
-    eq(filterValidIndices([-1, 0, 1], 2), [0, 1]);
+test("filterValidIndices: zero and negative indices dropped", () => {
+    eq(filterValidIndices([-1, 0, 1], 2), [1]);
 });
 
 test("filterValidIndices: all out-of-range → empty", () => {
-    eq(filterValidIndices([3, 4, 5], 3), []);
+    eq(filterValidIndices([4, 5, 6], 3), []);
 });
 
 // ─── Summary ──────────────────────────────────────────────────────────────────
